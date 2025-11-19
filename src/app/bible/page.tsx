@@ -176,6 +176,7 @@ export default function BiblePage() {
             {Array.from({ length: selectedBook.chapters }, (_, i) => i + 1).map((chapter) => (
               <button
                 key={chapter}
+                onClick={() => router.push(`/bible/${encodeURIComponent(selectedBook.name)}/${chapter}`)}
                 className="aspect-square bg-white rounded-2xl shadow-md hover:shadow-lg hover:scale-105 transition-all flex items-center justify-center text-lg font-semibold text-gray-700 hover:bg-gradient-to-br hover:from-amber-400 hover:to-amber-500 hover:text-white"
               >
                 {chapter}
