@@ -149,6 +149,12 @@ export default function BiblePage() {
     })).filter(section => section.books.length > 0),
   })).filter(testament => testament.sections.length > 0);
 
+  const handleChapterClick = (chapterNumber: number) => {
+    if (selectedBook) {
+      router.push(`/bible/${encodeURIComponent(selectedBook.name)}/${chapterNumber}`);
+    }
+  };
+
   if (selectedBook) {
     return (
       <div className="min-h-screen bg-gradient-to-b from-amber-50 to-white">
@@ -176,7 +182,7 @@ export default function BiblePage() {
             {Array.from({ length: selectedBook.chapters }, (_, i) => i + 1).map((chapter) => (
               <button
                 key={chapter}
-                onClick={() => router.push(`/bible/${encodeURIComponent(selectedBook.name)}/${chapter}`)}
+                onClick={() => handleChapterClick(chapter)}
                 className="aspect-square bg-white rounded-2xl shadow-md hover:shadow-lg hover:scale-105 transition-all flex items-center justify-center text-lg font-semibold text-gray-700 hover:bg-gradient-to-br hover:from-amber-400 hover:to-amber-500 hover:text-white"
               >
                 {chapter}
