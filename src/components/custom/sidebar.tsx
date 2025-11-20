@@ -7,13 +7,20 @@ import { UserProfile } from '@/lib/types';
 interface SidebarProps {
   isOpen: boolean;
   onClose: () => void;
+  activeTab?: 'account' | 'contribute' | 'frequency' | 'store';
 }
 
-export default function Sidebar({ isOpen, onClose }: SidebarProps) {
-  const [activeTab, setActiveTab] = useState<'account' | 'contribute' | 'frequency' | 'store'>('account');
+export default function Sidebar({ isOpen, onClose, activeTab: externalActiveTab }: SidebarProps) {
+  const [activeTab, setActiveTab] = useState<'account' | 'contribute' | 'frequency' | 'store'>(externalActiveTab || 'account');
   const [profile, setProfile] = useState<Partial<UserProfile>>({});
   const [isEditing, setIsEditing] = useState(false);
   const [editedProfile, setEditedProfile] = useState<Partial<UserProfile>>({});
+
+  useEffect(() => {
+    if (externalActiveTab) {
+      setActiveTab(externalActiveTab);
+    }
+  }, [externalActiveTab]);
 
   useEffect(() => {
     const saved = localStorage.getItem('userProfile');
