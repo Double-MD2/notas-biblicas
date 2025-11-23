@@ -1,35 +1,31 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect } from 'react';
+import { supabase } from '@/lib/supabase';
 import { useRouter } from 'next/navigation';
 
-export default function Page() {
+export default function Home() {
   const router = useRouter();
-  const [isMounted, setIsMounted] = useState(false);
 
   useEffect(() => {
-    setIsMounted(true);
+    checkUser();
   }, []);
 
-  useEffect(() => {
-    if (!isMounted) return;
-
-    // Verificar se o onboarding foi completado
-    const onboardingCompleted = localStorage.getItem('onboardingCompleted');
+  const checkUser = async () => {
+    const { data: { session } } = await supabase.auth.getSession();
     
-    if (onboardingCompleted === 'true') {
+    if (session) {
       router.push('/home');
     } else {
-      router.push('/onboarding');
+      router.push('/login');
     }
-  }, [router, isMounted]);
+  };
 
   return (
     <div className="min-h-screen bg-gradient-to-b from-amber-50 to-white flex items-center justify-center">
       <div className="text-center">
         <div className="w-16 h-16 border-4 border-amber-400 border-t-transparent rounded-full animate-spin mx-auto mb-4"></div>
-        <h1 className="text-2xl font-bold text-gray-800">Notas Bíblicas</h1>
-        <p className="text-gray-600 mt-2">Carregando...</p>
+        <p className="text-gray-600">Carregando...</p>
       </div>
     </div>
   );

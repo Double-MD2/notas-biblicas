@@ -19,8 +19,7 @@ const mockContents: DailyContent[] = [
     id: '2',
     type: 'verse',
     title: 'Versículo do Dia',
-    content: '"Porque Deus amou o mundo de tal maneira que deu o seu Filho unigênito..." - João 3:16',
-    reflection: 'Reflexão sobre o amor incondicional de Deus e como isso transforma nossas vidas.',
+    reflection: 'Versículos sobre o amor incondicional de Deus e com reflexões para internalizar no coração',
     duration: '3 min',
     image: 'https://images.unsplash.com/photo-1490730141103-6cac27aaab94?w=800&h=400&fit=crop',
     completed: false,
@@ -28,12 +27,14 @@ const mockContents: DailyContent[] = [
   {
     id: '3',
     type: 'devotional',
-    title: 'Devoção Diária',
-    content: 'Reflexão profunda sobre fé e esperança.',
+    title: 'Conexão',
+    content: 'Responda perguntas sobre sua jornada espiritual e personalize sua experiência no app.',
     questions: [
-      'Como você tem demonstrado fé em sua vida?',
-      'Quais áreas precisam de mais confiança em Deus?',
-      'O que você pode fazer hoje para fortalecer sua fé?',
+      'Quão próximo você se sente de Deus?',
+      'Quão importante é a fé na sua vida?',
+      'Com que frequência você ora?',
+      'Sente que está evoluindo na relação com Deus?',
+      'Quão envolvido você está em atividades da sua comunidade religiosa?',
     ],
     duration: '7 min',
     image: 'https://images.unsplash.com/photo-1519491050282-cf00c82424b4?w=800&h=400&fit=crop&q=80',
@@ -73,7 +74,26 @@ export default function HomePage() {
     // Carregar dados do localStorage
     const saved = localStorage.getItem('dailyContents');
     if (saved) {
-      setContents(JSON.parse(saved));
+      const savedContents = JSON.parse(saved);
+      // Atualizar os dados dos cards para garantir que estão corretos
+      const updatedContents = savedContents.map((content: DailyContent) => {
+        if (content.id === '2' && content.type === 'verse') {
+          return {
+            ...content,
+            reflection: 'Versículos sobre o amor incondicional de Deus e com reflexões para internalizar no coração'
+          };
+        }
+        // Atualizar a imagem do card "Oração do Dia"
+        if (content.id === '4' && content.type === 'prayer') {
+          return {
+            ...content,
+            image: 'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=800&h=400&fit=crop&q=80'
+          };
+        }
+        return content;
+      });
+      setContents(updatedContents);
+      localStorage.setItem('dailyContents', JSON.stringify(updatedContents));
     }
 
     // Calcular dias consecutivos
@@ -141,6 +161,8 @@ export default function HomePage() {
       window.location.href = '/versiculo-do-dia';
     } else if (content.type === 'prayer') {
       window.location.href = '/oracao-do-dia';
+    } else if (content.type === 'devotional') {
+      window.location.href = '/conexao';
     }
   };
 
@@ -293,14 +315,14 @@ export default function HomePage() {
                     <Clock className="w-4 h-4" />
                     <span>{content.duration}</span>
                   </div>
-                  <h3 className="text-xl font-bold text-white">{content.title}</h3>
+                  <h3 className="text-xl font-bold text-white">
+                    {content.title === 'Devoção Diária' ? 'Conexão' : content.title}
+                  </h3>
                 </div>
               </div>
 
               {/* Card Content */}
               <div className="p-4">
-                <p className="text-gray-700 mb-3">{content.content}</p>
-
                 {content.reflection && (
                   <div className="bg-amber-50 rounded-lg p-3 mb-3">
                     <p className="text-sm text-gray-700 italic">{content.reflection}</p>
@@ -309,7 +331,7 @@ export default function HomePage() {
 
                 {content.questions && expandedCard === content.id && (
                   <div className="space-y-2 mb-3">
-                    <p className="text-sm font-semibold text-gray-800">Perguntas para reflexão:</p>
+                    <p className="text-sm font-semibold text-gray-800">Perguntas para conectar-se</p>
                     {content.questions.map((question, idx) => (
                       <div key={idx} className="flex gap-2">
                         <span className="text-amber-500 font-semibold">{idx + 1}.</span>
