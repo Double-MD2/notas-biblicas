@@ -46,7 +46,7 @@ const mockContents: DailyContent[] = [
     title: 'Oração do Dia',
     content: 'Senhor, guia meus passos hoje. Que eu possa ser luz para aqueles ao meu redor...',
     duration: '2 min',
-    image: 'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=800&h=400&fit=crop&q=80',
+    image: 'https://images.unsplash.com/photo-1473186578172-c141e6798cf4?w=800&h=400&fit=crop&q=80',
     completed: false,
   },
   {
@@ -87,7 +87,7 @@ export default function HomePage() {
         if (content.id === '4' && content.type === 'prayer') {
           return {
             ...content,
-            image: 'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=800&h=400&fit=crop&q=80'
+            image: 'https://images.unsplash.com/photo-1473186578172-c141e6798cf4?w=800&h=400&fit=crop&q=80'
           };
         }
         return content;
