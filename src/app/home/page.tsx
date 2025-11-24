@@ -76,7 +76,19 @@ export default function HomePage() {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    initializeUser();
+    let isMounted = true;
+
+    const init = async () => {
+      if (isMounted) {
+        await initializeUser();
+      }
+    };
+
+    init();
+
+    return () => {
+      isMounted = false;
+    };
   }, []);
 
   const initializeUser = async () => {

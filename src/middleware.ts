@@ -6,23 +6,47 @@ export async function middleware(req: NextRequest) {
   const res = NextResponse.next();
   const supabase = createMiddlewareClient({ req, res });
 
+  // Verificar sessão do usuário
   const {
     data: { session },
   } = await supabase.auth.getSession();
 
-  // Se não está logado e está tentando acessar rota protegida
-  if (!session && !req.nextUrl.pathname.startsWith('/login') && req.nextUrl.pathname !== '/') {
-    return NextResponse.redirect(new URL('/login', req.url));
+  const isAuthPage = req.nextUrl.pathname === '/login';
+  const isRootPage = req.nextUrl.pathname === '/';
+
+  // Se está autenticado
+  if (session) {
+    // Se tenta acessar login, redirecionar para raiz
+    if (isAuthPage) {
+      return NextResponse.redirect(new URL('/', req.url));
+    }
+    // Permitir acesso a qualquer outra página
+    return res;
   }
 
-  // Se está logado e está tentando acessar login
-  if (session && req.nextUrl.pathname.startsWith('/login')) {
-    return NextResponse.redirect(new URL('/home', req.url));
+  // Se NÃO está autenticado
+  if (!session) {
+    // Se tenta acessar página protegida (não é login nem raiz), redirecionar para login
+    if (!isAuthPage && !isRootPage) {
+      return NextResponse.redirect(new URL('/login', req.url));
+    }
+    // Permitir acesso a login e raiz
+    return res;
   }
 
   return res;
 }
 
 export const config = {
-  matcher: ['/home/:path*', '/login', '/gratitude/:path*', '/bible/:path*', '/leitura-do-dia/:path*', '/versiculo-do-dia/:path*', '/oracao-do-dia/:path*', '/conexao/:path*'],
+  matcher: [
+    /*
+     * Match all request paths except for the ones starting with:
+     * - _next/static (static files)
+     * - _next/image (image optimization files)
+     * - favicon.ico (favicon file)
+     * - public folder
+     * - api routes
+     */
+    '/((?!_next/static|_next/image|favicon.ico|.*\\.(?:svg|png|jpg|jpeg|gif|webp)$|api).*)',
+  ],
 };

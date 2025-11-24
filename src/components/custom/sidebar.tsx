@@ -5,14 +5,6 @@ import { X, User, Camera, Heart, DollarSign, Calendar, Edit2, ShoppingCart, LogO
 import { UserProfile } from '@/lib/types';
 import { supabase } from '@/lib/supabase';
 import { useRouter } from 'next/navigation';
-import { supabase } from '@/lib/supabase';
-import { useRouter } from 'next/navigation';
-import { supabase } from '@/lib/supabase';
-import { useRouter } from 'next/navigation';
-import { supabase } from '@/lib/supabase';
-import { useRouter } from 'next/navigation';
-import { supabase } from '@/lib/supabase';
-import { useRouter } from 'next/navigation';
 
 interface SidebarProps {
   isOpen: boolean;
