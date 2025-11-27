@@ -1,13 +1,18 @@
 import { createClient } from '@supabase/supabase-js';
 
-// Ler variáveis de ambiente
-const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || '';
-const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || '';
+// Ler variáveis de ambiente com fallback seguro
+const supabaseUrl = typeof window !== 'undefined' 
+  ? (window as any).__NEXT_DATA__?.props?.pageProps?.env?.NEXT_PUBLIC_SUPABASE_URL || ''
+  : process.env.NEXT_PUBLIC_SUPABASE_URL || '';
 
-// Validação robusta das variáveis de ambiente
-if (!supabaseUrl || !supabaseAnonKey) {
-  console.error('❌ Erro: Variáveis de ambiente do Supabase não configuradas!');
-  console.error('Configure NEXT_PUBLIC_SUPABASE_URL e NEXT_PUBLIC_SUPABASE_ANON_KEY no arquivo .env.local');
+const supabaseAnonKey = typeof window !== 'undefined'
+  ? (window as any).__NEXT_DATA__?.props?.pageProps?.env?.NEXT_PUBLIC_SUPABASE_ANON_KEY || ''
+  : process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || '';
+
+// Validação robusta das variáveis de ambiente (apenas no desenvolvimento)
+if (process.env.NODE_ENV === 'development' && (!supabaseUrl || !supabaseAnonKey)) {
+  console.warn('⚠️ Variáveis de ambiente do Supabase não configuradas.');
+  console.warn('Configure NEXT_PUBLIC_SUPABASE_URL e NEXT_PUBLIC_SUPABASE_ANON_KEY no arquivo .env.local');
 }
 
 // Criar cliente Supabase com validação
@@ -41,7 +46,7 @@ export const isSupabaseConfigured = (): boolean => {
     supabaseAnonKey !== 'placeholder-key'
   );
   
-  if (!isConfigured) {
+  if (!isConfigured && process.env.NODE_ENV === 'development') {
     console.warn('⚠️ Supabase não está configurado. Configure as variáveis de ambiente.');
   }
   
