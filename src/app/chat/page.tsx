@@ -1,28 +1,23 @@
 'use client';
 
 import { useState, useRef, useEffect } from 'react';
-import { ArrowLeft, Send, Sparkles } from 'lucide-react';
+import { Send, Loader2, BookOpen, Sparkles } from 'lucide-react';
 
 interface Message {
-  id: string;
   role: 'user' | 'assistant';
   content: string;
-  timestamp: Date;
 }
 
 export default function ChatPage() {
   const [messages, setMessages] = useState<Message[]>([
     {
-      id: '1',
       role: 'assistant',
-      content: 'Olá! Sou seu assistente espiritual. Estou aqui para conversar sobre a Bíblia, Cristo, fé e espiritualidade. Como posso ajudá-lo hoje?',
-      timestamp: new Date(),
-    },
+      content: 'Olá! Sou seu assistente espiritual cristão. Como posso ajudá-lo hoje? Posso conversar sobre a Bíblia, fé, oração, reflexões bíblicas e sua jornada espiritual.'
+    }
   ]);
-  const [inputValue, setInputValue] = useState('');
+  const [input, setInput] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
-  const textareaRef = useRef<HTMLTextAreaElement>(null);
 
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -32,180 +27,170 @@ export default function ChatPage() {
     scrollToBottom();
   }, [messages]);
 
-  // Auto-focus no textarea quando a página carrega
-  useEffect(() => {
-    textareaRef.current?.focus();
-  }, []);
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!input.trim() || isLoading) return;
 
-  // Auto-resize do textarea
-  useEffect(() => {
-    if (textareaRef.current) {
-      textareaRef.current.style.height = 'auto';
-      textareaRef.current.style.height = `${Math.min(textareaRef.current.scrollHeight, 120)}px`;
-    }
-  }, [inputValue]);
-
-  const handleSendMessage = async () => {
-    if (!inputValue.trim() || isLoading) return;
-
-    const userMessage: Message = {
-      id: Date.now().toString(),
-      role: 'user',
-      content: inputValue,
-      timestamp: new Date(),
-    };
-
-    setMessages((prev) => [...prev, userMessage]);
-    setInputValue('');
+    const userMessage = input.trim();
+    setInput('');
+    
+    // Adicionar mensagem do usuário
+    const newMessages = [...messages, { role: 'user' as const, content: userMessage }];
+    setMessages(newMessages);
     setIsLoading(true);
 
     try {
-      const response = await fetch('/api/chat', {
+      // Chamar o endpoint /api/chat-free
+      const res = await fetch('/api/chat-free', {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          message: inputValue,
-          history: messages,
-        }),
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ 
+          message: userMessage,
+          history: messages.slice(-6) // Últimas 6 mensagens para contexto
+        })
       });
 
-      const data = await response.json();
+      // Ler o corpo ANTES de verificar response.ok
+      const ct = res.headers.get('content-type') || '';
+      const payload = ct.includes('application/json') 
+        ? await res.json() 
+        : { raw: await res.text() };
 
-      const assistantMessage: Message = {
-        id: (Date.now() + 1).toString(),
-        role: 'assistant',
-        content: data.message,
-        timestamp: new Date(),
-      };
+      // Se response.ok for false, NÃO lançar erro - exibir na UI
+      if (!res.ok) {
+        console.error({
+          status: res.status,
+          url: res.url,
+          payload
+        });
 
-      setMessages((prev) => [...prev, assistantMessage]);
+        // Exibir mensagem de erro na UI
+        const errorMessage = payload.error || payload.answer || `Erro (status ${res.status})`;
+        
+        setMessages([...newMessages, { 
+          role: 'assistant', 
+          content: errorMessage
+        }]);
+        return;
+      }
+
+      // Sucesso: adicionar resposta do assistente
+      setMessages([...newMessages, { 
+        role: 'assistant', 
+        content: payload.answer || 'Desculpe, não consegui gerar uma resposta.'
+      }]);
+
     } catch (error) {
-      console.error('Erro ao enviar mensagem:', error);
-      const errorMessage: Message = {
-        id: (Date.now() + 1).toString(),
-        role: 'assistant',
-        content: 'Desculpe, ocorreu um erro ao processar sua mensagem. Por favor, tente novamente.',
-        timestamp: new Date(),
-      };
-      setMessages((prev) => [...prev, errorMessage]);
+      console.error('Erro ao enviar mensagem:', {
+        error,
+        message: error instanceof Error ? error.message : 'Erro desconhecido'
+      });
+      
+      // Tratar timeout/CORS com mensagem amigável
+      let errorMessage = '❌ Desculpe, ocorreu um erro ao processar sua mensagem.';
+      
+      if (error instanceof TypeError && error.message.includes('fetch')) {
+        errorMessage = '❌ Erro de conexão. Verifique sua internet e tente novamente.';
+      }
+      
+      setMessages([
+        ...newMessages,
+        {
+          role: 'assistant',
+          content: errorMessage
+        }
+      ]);
     } finally {
       setIsLoading(false);
-      // Retorna o foco para o textarea após enviar
-      setTimeout(() => textareaRef.current?.focus(), 100);
-    }
-  };
-
-  const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
-    if (e.key === 'Enter' && !e.shiftKey) {
-      e.preventDefault();
-      handleSendMessage();
     }
   };
 
   return (
-    <div className="min-h-screen bg-gradient-to-b from-pink-50 to-white flex flex-col">
+    <div className="flex flex-col bg-gradient-to-b from-pink-50 to-white" style={{ height: 'calc(100vh - 80px)' }}>
       {/* Header */}
-      <header className="bg-white shadow-sm sticky top-0 z-40">
+      <header className="bg-white shadow-sm border-b border-pink-100 flex-shrink-0">
         <div className="container mx-auto px-4 py-4">
-          <div className="flex items-center gap-4">
-            <button
-              onClick={() => window.history.back()}
-              className="p-2 hover:bg-gray-100 rounded-lg transition-colors"
-            >
-              <ArrowLeft className="w-6 h-6 text-gray-700" />
-            </button>
-            
-            <div className="flex items-center gap-3">
-              <div className="w-10 h-10 bg-gradient-to-br from-pink-400 to-pink-500 rounded-full flex items-center justify-center">
-                <Sparkles className="w-5 h-5 text-white" />
-              </div>
-              <div>
-                <h1 className="text-lg font-bold text-gray-800">Chat Espiritual</h1>
-                <p className="text-xs text-gray-500">Assistente de IA</p>
-              </div>
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 bg-gradient-to-br from-pink-400 to-pink-500 rounded-full flex items-center justify-center">
+              <BookOpen className="w-6 h-6 text-white" />
+            </div>
+            <div>
+              <h1 className="text-xl font-bold text-gray-800">Chat Espiritual</h1>
+              <p className="text-xs text-gray-500">Converse sobre fé e Bíblia</p>
             </div>
           </div>
         </div>
       </header>
 
       {/* Messages Area */}
-      <div className="flex-1 overflow-y-auto px-4 py-6 space-y-4 pb-24">
-        {messages.map((message) => (
-          <div
-            key={message.id}
-            className={`flex ${message.role === 'user' ? 'justify-end' : 'justify-start'}`}
-          >
+      <div className="flex-1 overflow-y-auto px-4 py-6">
+        <div className="container mx-auto max-w-3xl">
+          {messages.map((message, index) => (
             <div
-              className={`max-w-[80%] rounded-2xl px-4 py-3 ${
-                message.role === 'user'
-                  ? 'bg-gradient-to-br from-pink-400 to-pink-500 text-white'
-                  : 'bg-white shadow-md text-gray-800'
-              }`}
+              key={index}
+              className={`flex ${message.role === 'user' ? 'justify-end' : 'justify-start'} mb-4`}
             >
-              <p className="text-sm leading-relaxed whitespace-pre-wrap">{message.content}</p>
-              <span
-                className={`text-xs mt-1 block ${
-                  message.role === 'user' ? 'text-pink-100' : 'text-gray-400'
+              <div
+                className={`max-w-[80%] rounded-2xl px-4 py-3 ${
+                  message.role === 'user'
+                    ? 'bg-gradient-to-br from-pink-400 to-pink-500 text-white'
+                    : 'bg-white shadow-md text-gray-800 border border-pink-100'
                 }`}
               >
-                {message.timestamp.toLocaleTimeString('pt-BR', {
-                  hour: '2-digit',
-                  minute: '2-digit',
-                })}
-              </span>
-            </div>
-          </div>
-        ))}
-
-        {isLoading && (
-          <div className="flex justify-start">
-            <div className="bg-white shadow-md rounded-2xl px-4 py-3">
-              <div className="flex gap-2">
-                <div className="w-2 h-2 bg-pink-400 rounded-full animate-bounce"></div>
-                <div className="w-2 h-2 bg-pink-400 rounded-full animate-bounce" style={{ animationDelay: '0.2s' }}></div>
-                <div className="w-2 h-2 bg-pink-400 rounded-full animate-bounce" style={{ animationDelay: '0.4s' }}></div>
+                {message.role === 'assistant' && (
+                  <div className="flex items-center gap-2 mb-2">
+                    <Sparkles className="w-4 h-4 text-pink-500" />
+                    <span className="text-xs font-semibold text-pink-600">Assistente Cristão</span>
+                  </div>
+                )}
+                <p className="text-sm leading-relaxed whitespace-pre-wrap">{message.content}</p>
               </div>
             </div>
-          </div>
-        )}
-
-        <div ref={messagesEndRef} />
+          ))}
+          
+          {isLoading && (
+            <div className="flex justify-start mb-4">
+              <div className="bg-white shadow-md rounded-2xl px-4 py-3 border border-pink-100">
+                <div className="flex items-center gap-2">
+                  <Loader2 className="w-4 h-4 text-pink-500 animate-spin" />
+                  <span className="text-sm text-gray-600">Pensando...</span>
+                </div>
+              </div>
+            </div>
+          )}
+          
+          <div ref={messagesEndRef} />
+        </div>
       </div>
 
-      {/* Input Area - Fixo na parte inferior */}
-      <div className="fixed bottom-0 left-0 right-0 bg-white border-t border-gray-200 px-4 py-3 shadow-lg z-50">
-        <div className="container mx-auto max-w-4xl">
-          <div className="flex gap-2 items-end">
-            <div className="flex-1 bg-gray-100 rounded-3xl px-4 py-2 flex items-center">
-              <textarea
-                ref={textareaRef}
-                value={inputValue}
-                onChange={(e) => setInputValue(e.target.value)}
-                onKeyDown={handleKeyDown}
-                placeholder="Digite sua mensagem..."
-                className="w-full bg-transparent resize-none outline-none text-gray-800 placeholder-gray-400 text-sm leading-6 border-none focus:ring-0"
-                rows={1}
-                style={{ minHeight: '24px', maxHeight: '120px' }}
-                autoComplete="off"
-                autoCorrect="off"
-                autoCapitalize="off"
-                spellCheck="false"
-              />
-            </div>
+      {/* Input Area */}
+      <div className="bg-white border-t border-pink-100 shadow-lg flex-shrink-0">
+        <div className="container mx-auto max-w-3xl px-4 py-4">
+          <form onSubmit={handleSubmit} className="flex gap-2">
+            <input
+              type="text"
+              value={input}
+              onChange={(e) => setInput(e.target.value)}
+              placeholder="Pergunte sobre a Bíblia, fé, oração..."
+              disabled={isLoading}
+              className="flex-1 px-4 py-3 border border-pink-200 rounded-full focus:outline-none focus:ring-2 focus:ring-pink-400 focus:border-transparent disabled:bg-gray-50 disabled:text-gray-400"
+            />
             <button
-              onClick={handleSendMessage}
-              disabled={!inputValue.trim() || isLoading}
-              className={`p-3 rounded-full transition-all flex-shrink-0 ${
-                inputValue.trim() && !isLoading
-                  ? 'bg-gradient-to-br from-pink-400 to-pink-500 text-white hover:shadow-lg hover:scale-105'
-                  : 'bg-gray-200 text-gray-400 cursor-not-allowed'
-              }`}
+              type="submit"
+              disabled={isLoading || !input.trim()}
+              className="bg-gradient-to-br from-pink-400 to-pink-500 text-white p-3 rounded-full hover:shadow-lg transition-all disabled:opacity-50 disabled:cursor-not-allowed hover:scale-105"
             >
-              <Send className="w-5 h-5" />
+              {isLoading ? (
+                <Loader2 className="w-6 h-6 animate-spin" />
+              ) : (
+                <Send className="w-6 h-6" />
+              )}
             </button>
-          </div>
+          </form>
+          
+          <p className="text-xs text-center text-gray-400 mt-2">
+            Chat bíblico gratuito • Powered by Gemini AI
+          </p>
         </div>
       </div>
     </div>

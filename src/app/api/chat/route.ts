@@ -1,58 +1,65 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { GoogleGenerativeAI } from '@google/generative-ai';
 
-export async function POST(request: NextRequest) {
+// Configurações para máxima compatibilidade
+export const runtime = 'nodejs';
+export const dynamic = 'force-dynamic';
+
+export async function POST(req: NextRequest) {
   try {
-    const { message, history } = await request.json();
-
-    // Construir o contexto da conversa
-    const messages = [
-      {
-        role: 'system',
-        content: `Você é um assistente espiritual cristão especializado em Bíblia, teologia e espiritualidade. 
-        Seu objetivo é ajudar as pessoas a compreenderem melhor a Palavra de Deus, responder perguntas sobre Cristo, 
-        fé, doutrina cristã e oferecer orientação espiritual baseada nos ensinamentos bíblicos.
-        
-        Seja sempre respeitoso, acolhedor e compassivo. Use linguagem clara e acessível.
-        Quando citar versículos bíblicos, sempre mencione o livro, capítulo e versículo.
-        Se não souber algo, seja honesto e sugira que a pessoa busque orientação com um líder espiritual.`,
-      },
-      ...history.map((msg: any) => ({
-        role: msg.role,
-        content: msg.content,
-      })),
-      {
-        role: 'user',
-        content: message,
-      },
-    ];
-
-    // Chamar a API da OpenAI
-    const response = await fetch('https://api.openai.com/v1/chat/completions', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
-      },
-      body: JSON.stringify({
-        model: 'gpt-4o',
-        messages: messages,
-        temperature: 0.7,
-        max_tokens: 1000,
-      }),
-    });
-
-    if (!response.ok) {
-      throw new Error('Erro ao chamar API da OpenAI');
+    // 1. Validação da chave de API
+    const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
+    
+    if (!GEMINI_API_KEY) {
+      return NextResponse.json(
+        { error: 'Chave da API não configurada. Configure GEMINI_API_KEY nas variáveis de ambiente.' },
+        { status: 401 }
+      );
     }
 
-    const data = await response.json();
-    const assistantMessage = data.choices[0].message.content;
+    // 2. Inicialização do modelo Gemini
+    const genAI = new GoogleGenerativeAI(GEMINI_API_KEY);
+    const model = genAI.getGenerativeModel({ model: 'gemini-pro' });
 
-    return NextResponse.json({ message: assistantMessage });
-  } catch (error) {
-    console.error('Erro na API de chat:', error);
+    // 3. Processamento da mensagem
+    const { messages } = await req.json();
+    
+    if (!messages || messages.length === 0) {
+      return NextResponse.json(
+        { error: 'Nenhuma mensagem fornecida' },
+        { status: 400 }
+      );
+    }
+
+    const lastMessage = messages[messages.length - 1].content;
+
+    // 4. Geração de conteúdo com o Gemini
+    const result = await model.generateContent(lastMessage);
+    const response = await result.response;
+    const text = response.text();
+    
+    return NextResponse.json({ text });
+
+  } catch (error: any) {
+    console.error('Erro no Gemini:', error);
+    
+    // Tratamento de erros específicos
+    if (error?.message?.includes('API key')) {
+      return NextResponse.json(
+        { error: 'Chave da API inválida ou expirada' },
+        { status: 401 }
+      );
+    }
+    
+    if (error?.message?.includes('quota')) {
+      return NextResponse.json(
+        { error: 'Limite de requisições excedido' },
+        { status: 429 }
+      );
+    }
+    
     return NextResponse.json(
-      { error: 'Erro ao processar mensagem' },
+      { error: 'Erro ao processar mensagem. Tente novamente.' },
       { status: 500 }
     );
   }

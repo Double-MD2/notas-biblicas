@@ -1,26 +1,38 @@
 'use client';
 
-import { useState } from 'react';
-import { ChevronDown, ChevronUp, Heart, BookOpen, ArrowLeft } from 'lucide-react';
+import { useState, useEffect } from 'react';
+import { ChevronDown, ChevronUp, Heart, BookOpen, ArrowLeft, Trash2 } from 'lucide-react';
 import { useRouter } from 'next/navigation';
+import { getFavoriteChapters, getFavoriteVerses, removeFavoriteChapter, removeFavoriteVerse, type FavoriteChapter, type FavoriteVerse } from '@/lib/favorites';
 
 export default function FavoritesPage() {
   const router = useRouter();
-  const [showChapters, setShowChapters] = useState(false);
-  const [showVerses, setShowVerses] = useState(false);
+  const [showChapters, setShowChapters] = useState(true);
+  const [showVerses, setShowVerses] = useState(true);
+  const [favoriteChapters, setFavoriteChapters] = useState<FavoriteChapter[]>([]);
+  const [favoriteVerses, setFavoriteVerses] = useState<FavoriteVerse[]>([]);
 
-  // Dados de exemplo - em produção viriam do localStorage ou banco de dados
-  const favoriteChapters = [
-    { book: 'João', chapter: 3, id: 'João-3' },
-    { book: 'Salmos', chapter: 23, id: 'Salmos-23' },
-    { book: 'Provérbios', chapter: 3, id: 'Provérbios-3' },
-  ];
+  // Carregar favoritos do localStorage
+  useEffect(() => {
+    loadFavorites();
+  }, []);
 
-  const favoriteVerses = [
-    { book: 'João', chapter: 3, verse: 16, text: 'Porque Deus amou o mundo de tal maneira que deu o seu Filho unigênito...', id: 'João-3-16' },
-    { book: 'Filipenses', chapter: 4, verse: 13, text: 'Posso todas as coisas naquele que me fortalece.', id: 'Filipenses-4-13' },
-    { book: 'Salmos', chapter: 23, verse: 1, text: 'O Senhor é o meu pastor; nada me faltará.', id: 'Salmos-23-1' },
-  ];
+  const loadFavorites = () => {
+    setFavoriteChapters(getFavoriteChapters());
+    setFavoriteVerses(getFavoriteVerses());
+  };
+
+  const handleRemoveChapter = (book: string, chapter: number, e: React.MouseEvent) => {
+    e.stopPropagation();
+    removeFavoriteChapter(book, chapter);
+    loadFavorites();
+  };
+
+  const handleRemoveVerse = (book: string, chapter: number, verse: number, e: React.MouseEvent) => {
+    e.stopPropagation();
+    removeFavoriteVerse(book, chapter, verse);
+    loadFavorites();
+  };
 
   return (
     <div className="min-h-screen bg-rose-50 pb-20">
@@ -71,15 +83,17 @@ export default function FavoritesPage() {
                 <div className="p-8 text-center">
                   <BookOpen className="w-12 h-12 text-gray-300 mx-auto mb-3" />
                   <p className="text-gray-500 text-sm">Nenhum capítulo favoritado ainda</p>
+                  <p className="text-gray-400 text-xs mt-2">
+                    Vá até a Bíblia e toque no coração para favoritar capítulos
+                  </p>
                 </div>
               ) : (
                 <div className="divide-y divide-gray-100">
                   {favoriteChapters.map((item) => (
                     <div
                       key={item.id}
-                      className="p-4 hover:bg-gray-50 transition-colors cursor-pointer flex items-center justify-between"
+                      className="p-4 hover:bg-gray-50 transition-colors cursor-pointer flex items-center justify-between group"
                       onClick={() => {
-                        // Navegar para o capítulo
                         router.push(`/bible?book=${item.book}&chapter=${item.chapter}`);
                       }}
                     >
@@ -92,7 +106,13 @@ export default function FavoritesPage() {
                           <p className="text-sm text-gray-500">Capítulo {item.chapter}</p>
                         </div>
                       </div>
-                      <Heart className="w-5 h-5 text-red-500 fill-red-500" />
+                      <button
+                        onClick={(e) => handleRemoveChapter(item.book, item.chapter, e)}
+                        className="p-2 hover:bg-red-50 rounded-lg transition-colors opacity-0 group-hover:opacity-100"
+                        title="Remover dos favoritos"
+                      >
+                        <Trash2 className="w-5 h-5 text-red-500" />
+                      </button>
                     </div>
                   ))}
                 </div>
@@ -128,15 +148,17 @@ export default function FavoritesPage() {
                 <div className="p-8 text-center">
                   <Heart className="w-12 h-12 text-gray-300 mx-auto mb-3" />
                   <p className="text-gray-500 text-sm">Nenhum versículo favoritado ainda</p>
+                  <p className="text-gray-400 text-xs mt-2">
+                    Selecione versículos na Bíblia e toque no coração para favoritar
+                  </p>
                 </div>
               ) : (
                 <div className="divide-y divide-gray-100">
                   {favoriteVerses.map((item) => (
                     <div
                       key={item.id}
-                      className="p-4 hover:bg-gray-50 transition-colors cursor-pointer"
+                      className="p-4 hover:bg-gray-50 transition-colors cursor-pointer group"
                       onClick={() => {
-                        // Navegar para o versículo específico
                         router.push(`/bible?book=${item.book}&chapter=${item.chapter}&verse=${item.verse}`);
                       }}
                     >
@@ -145,8 +167,17 @@ export default function FavoritesPage() {
                           <Heart className="w-5 h-5 text-red-600 fill-red-600" />
                         </div>
                         <div className="flex-1">
-                          <div className="flex items-center gap-2 mb-1">
-                            <h3 className="font-semibold text-gray-800">{item.book} {item.chapter}:{item.verse}</h3>
+                          <div className="flex items-center justify-between mb-1">
+                            <h3 className="font-semibold text-gray-800">
+                              {item.book} {item.chapter}:{item.verse}
+                            </h3>
+                            <button
+                              onClick={(e) => handleRemoveVerse(item.book, item.chapter, item.verse, e)}
+                              className="p-2 hover:bg-red-50 rounded-lg transition-colors opacity-0 group-hover:opacity-100"
+                              title="Remover dos favoritos"
+                            >
+                              <Trash2 className="w-4 h-4 text-red-500" />
+                            </button>
                           </div>
                           <p className="text-sm text-gray-600 leading-relaxed">{item.text}</p>
                         </div>
@@ -160,19 +191,21 @@ export default function FavoritesPage() {
         </div>
 
         {/* Mensagem informativa */}
-        <div className="bg-blue-50 border border-blue-200 rounded-xl p-4">
-          <div className="flex gap-3">
-            <div className="w-8 h-8 bg-blue-100 rounded-full flex items-center justify-center flex-shrink-0">
-              <Heart className="w-4 h-4 text-blue-600" />
-            </div>
-            <div>
-              <h3 className="font-semibold text-blue-900 mb-1">Dica</h3>
-              <p className="text-sm text-blue-700">
-                Ao ler a Bíblia, toque no coração para favoritar capítulos ou selecione versículos e use o botão de favoritar para salvá-los aqui.
-              </p>
+        {(favoriteChapters.length === 0 && favoriteVerses.length === 0) && (
+          <div className="bg-blue-50 border border-blue-200 rounded-xl p-4">
+            <div className="flex gap-3">
+              <div className="w-8 h-8 bg-blue-100 rounded-full flex items-center justify-center flex-shrink-0">
+                <Heart className="w-4 h-4 text-blue-600" />
+              </div>
+              <div>
+                <h3 className="font-semibold text-blue-900 mb-1">Como favoritar?</h3>
+                <p className="text-sm text-blue-700">
+                  Ao ler a Bíblia, toque no coração para favoritar capítulos inteiros ou selecione versículos específicos e use o botão de favoritar. Seus favoritos aparecerão aqui!
+                </p>
+              </div>
             </div>
           </div>
-        </div>
+        )}
       </div>
     </div>
   );

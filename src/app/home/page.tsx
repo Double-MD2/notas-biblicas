@@ -6,13 +6,16 @@ import { DailyContent } from '@/lib/types';
 import Sidebar from '@/components/custom/sidebar';
 import { supabase } from '@/lib/supabase';
 import { useRouter } from 'next/navigation';
+import { useIncrementLoginOnce } from '@/hooks/useIncrementLoginOnce';
+import WeekActivityStreak from '@/components/custom/WeekActivityStreak';
+import { useWeekStreak } from '@/hooks/useWeekStreak';
 
 const mockContents: DailyContent[] = [
   {
     id: '1',
     type: 'lectionary',
     title: 'Leitura do Dia',
-    content: 'Leitura conforme o calendário litúrgico de hoje.',
+    content: 'Leituras diárias conforme o Calendário Romano Geral (API CNBB)',
     duration: '5 min',
     image: 'https://images.unsplash.com/photo-1504052434569-70ad5836ab65?w=800&h=400&fit=crop',
     completed: false,
@@ -24,6 +27,15 @@ const mockContents: DailyContent[] = [
     reflection: 'Versículos sobre o amor incondicional de Deus e com reflexões para internalizar no coração',
     duration: '3 min',
     image: 'https://images.unsplash.com/photo-1490730141103-6cac27aaab94?w=800&h=400&fit=crop',
+    completed: false,
+  },
+  {
+    id: '4',
+    type: 'prayer',
+    title: 'Oração do Dia',
+    content: 'Senhor, guia meus passos hoje. Que eu possa ser luz para aqueles ao meu redor...',
+    duration: '2 min',
+    image: 'https://images.unsplash.com/photo-1445445290350-18a3b86e0b5a?w=800&h=400&fit=crop&q=80',
     completed: false,
   },
   {
@@ -43,15 +55,6 @@ const mockContents: DailyContent[] = [
     completed: false,
   },
   {
-    id: '4',
-    type: 'prayer',
-    title: 'Oração do Dia',
-    content: 'Senhor, guia meus passos hoje. Que eu possa ser luz para aqueles ao meu redor...',
-    duration: '2 min',
-    image: 'https://images.unsplash.com/photo-1445445290350-18a3b86e0b5a?w=800&h=400&fit=crop&q=80',
-    completed: false,
-  },
-  {
     id: '5',
     type: 'gratitude',
     title: 'Agradecimento a Deus',
@@ -66,14 +69,21 @@ const weekDays = ['D', 'S', 'T', 'Q', 'Q', 'S', 'S'];
 
 export default function HomePage() {
   const router = useRouter();
+  
+  // Hook para incrementar login stats 1x por sessão
+  useIncrementLoginOnce();
+  
+  // Hook compartilhado para streak - SINCRONIZADO com WeekActivityStreak
+  const { streak } = useWeekStreak();
+  
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [sidebarInitialTab, setSidebarInitialTab] = useState<'account' | 'contribute' | 'frequency' | 'store'>('account');
   const [contents, setContents] = useState<DailyContent[]>(mockContents);
   const [selectedDay, setSelectedDay] = useState(new Date().getDay());
   const [expandedCard, setExpandedCard] = useState<string | null>(null);
-  const [consecutiveDays, setConsecutiveDays] = useState(0);
   const [userId, setUserId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+  const [weeklyAccess, setWeeklyAccess] = useState<boolean[]>([false, false, false, false, false, false, false]);
 
   useEffect(() => {
     initializeUser();
@@ -85,13 +95,49 @@ export default function HomePage() {
       const { data: { session } } = await supabase.auth.getSession();
 
       if (!session) {
-        console.log('Nenhuma sessão encontrada');
+        console.log('[HOME] Nenhuma sessão encontrada - redirecionando para login');
         router.push('/login');
         return;
       }
 
       const currentUserId = session.user.id;
       setUserId(currentUserId);
+
+      // Verificar se quiz foi completo
+      try {
+        const quizResponse = await fetch(`/api/quiz-status?userId=${currentUserId}`);
+        
+        if (quizResponse.ok) {
+          const quizStatus = await quizResponse.json();
+          
+          if (!quizStatus.completed) {
+            // Quiz não completo - bloquear acesso e redirecionar
+            console.log('[HOME] ❌ Quiz não completo - bloqueando acesso');
+            
+            // Telemetria
+            if (typeof window !== 'undefined' && (window as any).gtag) {
+              (window as any).gtag('event', 'blocked_home_due_to_incomplete_quiz', {
+                user_id: currentUserId,
+                current_step: quizStatus.currentStep || 0,
+              });
+            }
+            
+            router.push('/onboarding');
+            return;
+          }
+          
+          console.log('[HOME] ✅ Quiz completo - acesso permitido');
+          
+          // Telemetria
+          if (typeof window !== 'undefined' && (window as any).gtag) {
+            (window as any).gtag('event', 'home_entered', {
+              user_id: currentUserId,
+            });
+          }
+        }
+      } catch (quizError) {
+        console.warn('[HOME] ⚠️ Erro ao verificar quiz (permitindo acesso):', quizError);
+      }
 
       // Buscar dados do usuário do banco de dados (OPCIONAL - não bloqueia se falhar)
       try {
@@ -100,12 +146,11 @@ export default function HomePage() {
           const data = await response.json();
 
           if (data.userData) {
-            setConsecutiveDays(data.userData.consecutive_days || 0);
-
-            // Se tem histórico, calcular dias consecutivos
+            // Se tem histórico, calcular acessos da semana atual
             if (data.accessHistory && data.accessHistory.length > 0) {
-              const consecutive = calculateConsecutiveDaysFromHistory(data.accessHistory);
-              setConsecutiveDays(consecutive);
+              // Calcular acessos da semana atual
+              const weekAccess = calculateWeeklyAccess(data.accessHistory);
+              setWeeklyAccess(weekAccess);
             }
           } else {
             // Primeiro acesso - criar dados iniciais
@@ -126,6 +171,12 @@ export default function HomePage() {
       if (saved) {
         const savedContents = JSON.parse(saved);
         const updatedContents = savedContents.map((content: DailyContent) => {
+          if (content.id === '1' && content.type === 'lectionary') {
+            return {
+              ...content,
+              content: 'Leituras diárias conforme o Calendário Romano Geral (API CNBB)'
+            };
+          }
           if (content.id === '2' && content.type === 'verse') {
             return {
               ...content,
@@ -149,6 +200,36 @@ export default function HomePage() {
       console.error('Erro ao inicializar usuário:', error);
       setLoading(false);
     }
+  };
+
+  const calculateWeeklyAccess = (history: any[]): boolean[] => {
+    const today = new Date();
+    const currentDayOfWeek = today.getDay(); // 0 = Domingo, 6 = Sábado
+    
+    // Encontrar o domingo da semana atual
+    const startOfWeek = new Date(today);
+    startOfWeek.setDate(today.getDate() - currentDayOfWeek);
+    startOfWeek.setHours(0, 0, 0, 0);
+    
+    // Array para armazenar se cada dia da semana foi acessado
+    const weekAccess = [false, false, false, false, false, false, false];
+    
+    // Verificar cada dia da semana
+    for (let i = 0; i < 7; i++) {
+      const checkDate = new Date(startOfWeek);
+      checkDate.setDate(startOfWeek.getDate() + i);
+      const dateString = checkDate.toISOString().split('T')[0];
+      
+      // Verificar se existe registro de acesso para este dia
+      const accessed = history.some(record => {
+        const recordDate = new Date(record.access_date).toISOString().split('T')[0];
+        return recordDate === dateString && record.accessed === true;
+      });
+      
+      weekAccess[i] = accessed;
+    }
+    
+    return weekAccess;
   };
 
   const createInitialUserData = async (currentUserId: string) => {
@@ -181,8 +262,11 @@ export default function HomePage() {
           })
         });
       }
-
-      setConsecutiveDays(1);
+      
+      // Atualizar acesso semanal
+      const weekAccess = [false, false, false, false, false, false, false];
+      weekAccess[new Date().getDay()] = true;
+      setWeeklyAccess(weekAccess);
     } catch (error) {
       console.error('Erro ao criar dados iniciais:', error);
     }
@@ -202,13 +286,14 @@ export default function HomePage() {
         })
       });
 
-      // Buscar histórico atualizado e recalcular dias consecutivos
+      // Buscar histórico atualizado e recalcular acessos semanais
       const response = await fetch(`/api/access-history?userId=${currentUserId}`);
       const history = await response.json();
       
       if (history && history.length > 0) {
-        const consecutive = calculateConsecutiveDaysFromHistory(history);
-        setConsecutiveDays(consecutive);
+        // Atualizar acesso semanal
+        const weekAccess = calculateWeeklyAccess(history);
+        setWeeklyAccess(weekAccess);
 
         // Atualizar dados do usuário
         await fetch('/api/user', {
@@ -216,7 +301,7 @@ export default function HomePage() {
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             userId: currentUserId,
-            consecutiveDays: consecutive,
+            consecutiveDays: streak, // Usar streak do hook compartilhado
             lastAccessDate: new Date().toISOString(),
             onboardingCompleted: true
           })
@@ -225,36 +310,6 @@ export default function HomePage() {
     } catch (error) {
       console.error('Erro ao registrar acesso:', error);
     }
-  };
-
-  const calculateConsecutiveDaysFromHistory = (history: any[]): number => {
-    if (!history || history.length === 0) return 0;
-
-    // Ordenar por data decrescente (mais recente primeiro)
-    const sortedHistory = [...history].sort((a, b) => 
-      new Date(b.access_date).getTime() - new Date(a.access_date).getTime()
-    );
-
-    let consecutive = 0;
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
-
-    for (let i = 0; i < sortedHistory.length; i++) {
-      const accessDate = new Date(sortedHistory[i].access_date);
-      accessDate.setHours(0, 0, 0, 0);
-      
-      const expectedDate = new Date(today);
-      expectedDate.setDate(today.getDate() - i);
-      expectedDate.setHours(0, 0, 0, 0);
-
-      if (accessDate.getTime() === expectedDate.getTime() && sortedHistory[i].accessed) {
-        consecutive++;
-      } else {
-        break;
-      }
-    }
-
-    return consecutive;
   };
 
   const toggleComplete = (id: string) => {
@@ -292,6 +347,23 @@ export default function HomePage() {
     setSidebarOpen(true);
   };
 
+  const getDayStyle = (index: number) => {
+    const today = new Date().getDay();
+    const isToday = index === today;
+    const isAccessed = weeklyAccess[index];
+    
+    if (isToday) {
+      // Dia atual - laranja
+      return 'bg-gradient-to-br from-orange-400 to-orange-500 text-white shadow-lg scale-110';
+    } else if (isAccessed) {
+      // Dia acessado - amarelo claro
+      return 'bg-gradient-to-br from-yellow-200 to-yellow-300 text-gray-800';
+    } else {
+      // Dia não acessado - cinza escuro
+      return 'bg-gray-700 text-gray-400';
+    }
+  };
+
   if (loading) {
     return (
       <div className="min-h-screen bg-gradient-to-b from-amber-50 to-white flex items-center justify-center">
@@ -320,14 +392,14 @@ export default function HomePage() {
               <img src="https://k6hrqrxuu8obbfwn.public.blob.vercel-storage.com/temp/8f5542a7-c136-497a-822e-8e2a2fb72e5e.png" alt="Plano Diário" className="h-16 w-auto" />
             </div>
 
-            {/* Card de Sequência Atual */}
+            {/* Card de Sequência Atual - Sincronizado com WeekActivityStreak via hook compartilhado */}
             <button 
               onClick={() => openSidebarWithTab('frequency')}
               className="bg-gradient-to-br from-blue-400 to-blue-600 rounded-xl p-3 text-white shadow-lg hover:shadow-xl transition-all hover:scale-105"
             >
               <div className="flex items-center gap-2">
                 <Star className="w-5 h-5 animate-pulse" />
-                <p className="text-lg font-bold leading-none">{consecutiveDays}</p>
+                <p className="text-lg font-bold leading-none lasy-highlight">{streak}</p>
               </div>
             </button>
           </div>
@@ -335,34 +407,11 @@ export default function HomePage() {
       </header>
 
       <div className="container mx-auto px-4 py-6">
-        {/* Weekly Calendar */}
-        <div className="bg-white rounded-2xl shadow-md p-6 mb-6">
-          <div className="flex justify-between items-center mb-4">
-            <h2 className="text-lg font-semibold text-gray-800">Sua Semana</h2>
-            <span className="text-sm text-gray-500">
-              {contents.filter(c => c.completed).length} de 7 completos
-            </span>
-          </div>
-          
-          <div className="flex justify-between gap-2">
-            {weekDays.map((day, index) => (
-              <button
-                key={index}
-                onClick={() => setSelectedDay(index)}
-                className={`flex-1 aspect-square rounded-full flex items-center justify-center font-semibold transition-all ${
-                  index === selectedDay
-                    ? 'bg-gradient-to-br from-amber-400 to-amber-500 text-white shadow-lg scale-110'
-                    : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
-                }`}
-              >
-                {day}
-              </button>
-            ))}
-          </div>
-        </div>
+        {/* Weekly Calendar - Componente com dados do Supabase */}
+        <WeekActivityStreak />
 
         {/* Quick Access Buttons */}
-        <div className="grid grid-cols-4 gap-3 mb-6">
+        <div className="grid grid-cols-4 gap-3 mb-6 mt-8">
           <button 
             onClick={handleBibleClick}
             className="flex flex-col items-center gap-2 p-4 bg-white rounded-2xl shadow-md hover:shadow-lg transition-all"
@@ -377,7 +426,7 @@ export default function HomePage() {
             onClick={() => openSidebarWithTab('contribute')}
             className="flex flex-col items-center gap-2 p-4 bg-white rounded-2xl shadow-md hover:shadow-lg transition-all"
           >
-            <div className="w-12 h-12 bg-gradient-to-br from-green-400 to-green-500 rounded-full flex items-center justify-center">
+            <div className="w-12 h-12 bg-gradient-to-br from-red-500 to-red-600 rounded-full flex items-center justify-center">
               <Heart className="w-6 h-6 text-white" />
             </div>
             <span className="text-xs font-semibold text-gray-700 text-center">Contribuir</span>
@@ -387,13 +436,16 @@ export default function HomePage() {
             onClick={() => openSidebarWithTab('store')}
             className="flex flex-col items-center gap-2 p-4 bg-white rounded-2xl shadow-md hover:shadow-lg transition-all"
           >
-            <div className="w-12 h-12 bg-gradient-to-br from-gray-400 to-gray-500 rounded-full flex items-center justify-center">
+            <div className="w-12 h-12 bg-gradient-to-br from-green-500 to-green-600 rounded-full flex items-center justify-center">
               <ShoppingCart className="w-6 h-6 text-white" />
             </div>
             <span className="text-xs font-semibold text-gray-700 text-center">Shop</span>
           </button>
 
-          <button className="flex flex-col items-center gap-2 p-4 bg-white rounded-2xl shadow-md hover:shadow-lg transition-all">
+          <button 
+            onClick={() => router.push('/chat')}
+            className="flex flex-col items-center gap-2 p-4 bg-white rounded-2xl shadow-md hover:shadow-lg transition-all"
+          >
             <div className="w-12 h-12 bg-gradient-to-br from-pink-400 to-pink-500 rounded-full flex items-center justify-center">
               <MessageCircle className="w-6 h-6 text-white" />
             </div>

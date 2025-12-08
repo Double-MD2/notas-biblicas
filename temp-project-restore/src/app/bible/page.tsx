@@ -1,14 +1,13 @@
 'use client';
 
 import { useState } from 'react';
-import { ArrowLeft, Search, BookOpen, Heart, Share2, Bookmark, Settings, Moon, Sun } from 'lucide-react';
+import { ArrowLeft, BookOpen, Heart, Share2, Bookmark, Settings, Moon, Sun } from 'lucide-react';
 import { useRouter } from 'next/navigation';
 import BibleBooks from '@/components/bible/BibleBooks';
 import BibleChapters from '@/components/bible/BibleChapters';
 import BibleReader from '@/components/bible/BibleReader';
-import BibleSearch from '@/components/bible/BibleSearch';
 
-type ViewMode = 'books' | 'chapters' | 'reader' | 'search';
+type ViewMode = 'books' | 'chapters' | 'reader';
 
 const bookChapters: Record<string, number> = {
   'Gênesis': 50, 'Êxodo': 40, 'Levítico': 27, 'Números': 36, 'Deuteronômio': 34,
@@ -55,15 +54,12 @@ export default function BiblePage() {
     } else if (viewMode === 'chapters') {
       setViewMode('books');
       setSelectedBook(null);
-    } else if (viewMode === 'search') {
-      setViewMode('books');
     } else {
       router.push('/home');
     }
   };
 
   const getTitle = () => {
-    if (viewMode === 'search') return 'Buscar';
     if (viewMode === 'reader' && selectedBook && selectedChapter) {
       return `${selectedBook} ${selectedChapter}`;
     }
@@ -93,12 +89,6 @@ export default function BiblePage() {
             </h1>
 
             <div className="flex items-center gap-2">
-              <button
-                onClick={() => setViewMode('search')}
-                className={`p-2 ${darkMode ? 'hover:bg-gray-700' : 'hover:bg-gray-100'} rounded-lg transition-colors`}
-              >
-                <Search className={`w-6 h-6 ${darkMode ? 'text-white' : 'text-gray-700'}`} />
-              </button>
               <button
                 onClick={() => setDarkMode(!darkMode)}
                 className={`p-2 ${darkMode ? 'hover:bg-gray-700' : 'hover:bg-gray-100'} rounded-lg transition-colors`}
@@ -136,10 +126,6 @@ export default function BiblePage() {
             onNavigate={handleChapterNavigate}
             totalChapters={getTotalChapters()}
           />
-        )}
-        
-        {viewMode === 'search' && (
-          <BibleSearch darkMode={darkMode} />
         )}
       </div>
 

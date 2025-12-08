@@ -1,56 +1,89 @@
 'use client';
 
-import { useState, useEffect } from 'react';
-import { supabase, isSupabaseConfigured } from '@/lib/supabase';
+import { useState } from 'react';
+import { supabase } from '@/lib/supabase';
 import { useRouter } from 'next/navigation';
+import { useDailyLogin } from '@/hooks/useDailyLogin';
 
 export default function LoginPage() {
   const router = useRouter();
-  const [loading, setLoading] = useState(true);
+  const { logDailyLogin } = useDailyLogin();
+  const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [view, setView] = useState<'sign_in' | 'sign_up' | 'forgot_password'>('sign_in');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [submitting, setSubmitting] = useState(false);
 
-  useEffect(() => {
-    console.log('[LOGIN useEffect] Iniciando verificação...');
+  const handleLoginCallback = async (userId: string, token: string) => {
+    try {
+      console.log('[LOGIN] 📞 Chamando login-callback...');
+      
+      // Chamar endpoint de login-callback para incrementar loginCount
+      const response = await fetch('/api/auth/login-callback', {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${token}`,
+        },
+      });
 
-    // Verificar se Supabase está configurado
-    if (!isSupabaseConfigured()) {
-      console.log('[LOGIN useEffect] Supabase não configurado');
-      setError('Supabase não está configurado. Configure as variáveis de ambiente.');
-      setLoading(false);
-      return;
+      if (response.ok) {
+        const data = await response.json();
+        console.log('[LOGIN] ✅ Login-callback bem-sucedido:', {
+          loginCount: data.loginCount,
+          quizCompleted: data.quizCompleted,
+          redirectTo: data.redirectTo,
+        });
+
+        // Telemetria
+        if (typeof window !== 'undefined' && (window as any).gtag) {
+          (window as any).gtag('event', 'login_success', {
+            user_id: userId,
+            login_count: data.loginCount,
+            redirect_to: data.redirectTo,
+          });
+          
+          if (data.redirectTo === '/home') {
+            (window as any).gtag('event', 'home_entered', {
+              user_id: userId,
+            });
+          } else {
+            (window as any).gtag('event', 'onboarding_redirect', {
+              user_id: userId,
+            });
+          }
+        }
+
+        // Redirecionar conforme resposta
+        window.location.href = data.redirectTo;
+      } else {
+        console.warn('[LOGIN] ⚠️ Erro no login-callback, usando fallback');
+        
+        // Fallback: buscar perfil diretamente
+        const profileResponse = await fetch('/api/user-profile', {
+          headers: {
+            'Authorization': `Bearer ${token}`,
+          },
+        });
+
+        if (profileResponse.ok) {
+          const profileData = await profileResponse.json();
+          const redirectTo = profileData.quizCompleted ? '/home' : '/onboarding';
+          
+          console.log('[LOGIN] 🔀 Redirecionando para:', redirectTo);
+          window.location.href = redirectTo;
+        } else {
+          // Se tudo falhar, ir para onboarding
+          console.log('[LOGIN] ⚠️ Erro ao buscar perfil, indo para onboarding');
+          window.location.href = '/onboarding';
+        }
+      }
+    } catch (error) {
+      console.error('[LOGIN] ❌ Erro no login-callback:', error);
+      // Em caso de erro, redirecionar para onboarding por segurança
+      window.location.href = '/onboarding';
     }
-
-    // DESABILITADO temporariamente para evitar loops
-    // O middleware vai cuidar do redirecionamento se já tiver sessão
-    console.log('[LOGIN useEffect] Mostrando formulário (verificação de sessão desabilitada)');
-    setLoading(false);
-
-    // Verificar sessão atual
-    // const checkSession = async () => {
-    //   try {
-    //     console.log('[LOGIN useEffect] Verificando sessão...');
-    //     const { data: { session } } = await supabase.auth.getSession();
-    //     console.log('[LOGIN useEffect] Sessão:', session ? 'encontrada' : 'não encontrada');
-
-    //     if (session) {
-    //       console.log('[LOGIN useEffect] Sessão encontrada, redirecionando para /home');
-    //       window.location.href = '/home';
-    //     } else {
-    //       console.log('[LOGIN useEffect] Nenhuma sessão, mostrando formulário');
-    //       setLoading(false);
-    //     }
-    //   } catch (err) {
-    //     console.error('[LOGIN useEffect] Erro ao verificar sessão:', err);
-    //     setLoading(false);
-    //   }
-    // };
-
-    // checkSession();
-  }, [router]);
+  };
 
   const handleSignIn = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -59,7 +92,6 @@ export default function LoginPage() {
 
     console.log('=== [LOGIN] INICIANDO PROCESSO DE LOGIN ===');
     console.log('[LOGIN] Email:', email);
-    console.log('[LOGIN] localStorage antes:', localStorage.getItem('supabase.auth.token'));
 
     try {
       console.log('[LOGIN] Chamando signInWithPassword...');
@@ -72,8 +104,6 @@ export default function LoginPage() {
 
       const endTime = Date.now();
       console.log(`[LOGIN] Resposta recebida em ${endTime - startTime}ms`);
-      console.log('[LOGIN] Data completo:', JSON.stringify(data, null, 2));
-      console.log('[LOGIN] Error:', signInError);
 
       if (signInError) {
         console.error('[LOGIN] ❌ Erro de autenticação:', signInError);
@@ -95,10 +125,12 @@ export default function LoginPage() {
 
         if (savedSession) {
           console.log('[LOGIN] ✅ Sessão confirmada!');
-          console.log('[LOGIN] 🚀 Redirecionando para /home...');
-
-          // Usar window.location para garantir reload completo e middleware pegar os cookies
-          window.location.href = '/home';
+          
+          // Registrar login diário no Supabase
+          await logDailyLogin();
+          
+          // Chamar login-callback para incrementar loginCount e obter redirecionamento
+          await handleLoginCallback(savedSession.user.id, savedSession.access_token);
         } else {
           console.error('[LOGIN] ❌ Sessão NÃO foi persistida!');
           setError('Erro ao salvar sessão. Tente novamente.');
@@ -135,7 +167,21 @@ export default function LoginPage() {
 
       if (data.session) {
         // Cadastro e login automático
-        router.replace('/home');
+        console.log('[SIGNUP] ✅ Cadastro bem-sucedido!');
+        console.log('[SIGNUP] User ID:', data.session.user.id);
+        
+        // Registrar login diário no Supabase
+        await logDailyLogin();
+        
+        // Telemetria
+        if (typeof window !== 'undefined' && (window as any).gtag) {
+          (window as any).gtag('event', 'sign_up', {
+            user_id: data.session.user.id,
+          });
+        }
+        
+        // Chamar login-callback (novo usuário sempre vai para onboarding)
+        await handleLoginCallback(data.session.user.id, data.session.access_token);
       } else {
         // Email de confirmação enviado
         setError('Verifique seu email para confirmar o cadastro.');

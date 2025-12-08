@@ -3,9 +3,11 @@
 import { useEffect, useState } from 'react';
 import { supabase } from '@/lib/supabase';
 import { useRouter } from 'next/navigation';
+import { useDailyLogin } from '@/hooks/useDailyLogin';
 
 export default function Home() {
   const router = useRouter();
+  const { logDailyLogin } = useDailyLogin();
   const [isChecking, setIsChecking] = useState(true);
 
   useEffect(() => {
@@ -18,6 +20,8 @@ export default function Home() {
         if (!isMounted) return;
 
         if (session) {
+          // Registrar login diário ao restaurar sessão
+          await logDailyLogin();
           router.replace('/home');
         } else {
           router.replace('/login');
@@ -39,7 +43,7 @@ export default function Home() {
     return () => {
       isMounted = false;
     };
-  }, [router]);
+  }, [router, logDailyLogin]);
 
   // Mostrar spinner ENQUANTO está checando
   if (isChecking) {

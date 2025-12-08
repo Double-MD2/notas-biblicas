@@ -2,6 +2,12 @@
 
 import { useState, useEffect } from 'react';
 import { Heart, Share2, ChevronLeft, ChevronRight, Type, Highlighter, Loader2, Link as LinkIcon, Mail, MessageCircle, Facebook, Twitter, Copy } from 'lucide-react';
+import { 
+  toggleFavoriteChapter, 
+  isChapterFavorite,
+  toggleFavoriteVerse,
+  isVerseFavorite
+} from '@/lib/favorites';
 
 interface BibleReaderProps {
   bookName: string;
@@ -22,10 +28,25 @@ export default function BibleReader({ bookName, chapter, darkMode, onNavigate, t
   const [verses, setVerses] = useState<Verse[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [favorites, setFavorites] = useState<Set<string>>(new Set());
+  const [isFavorite, setIsFavorite] = useState(false);
+  const [favoriteVerses, setFavoriteVerses] = useState<Set<number>>(new Set());
   const [highlights, setHighlights] = useState<Set<string>>(new Set());
   const [showShareMenu, setShowShareMenu] = useState(false);
   const [showChapterShareMenu, setShowChapterShareMenu] = useState(false);
+
+  // Carregar estado de favoritos ao montar/mudar capítulo
+  useEffect(() => {
+    setIsFavorite(isChapterFavorite(bookName, chapter));
+    
+    // Carregar versículos favoritos deste capítulo
+    const favVerses = new Set<number>();
+    verses.forEach(v => {
+      if (isVerseFavorite(bookName, chapter, v.number)) {
+        favVerses.add(v.number);
+      }
+    });
+    setFavoriteVerses(favVerses);
+  }, [bookName, chapter, verses]);
 
   useEffect(() => {
     const fetchVerses = async () => {
@@ -95,19 +116,52 @@ export default function BibleReader({ bookName, chapter, darkMode, onNavigate, t
     alert('Versículos copiados para a área de transferência!');
   };
 
-  const handleFavorite = () => {
-    const key = `${bookName}-${chapter}`;
-    setFavorites(prev => {
-      const newFavorites = new Set(prev);
-      if (newFavorites.has(key)) {
-        newFavorites.delete(key);
-        alert('Removido dos favoritos!');
-      } else {
-        newFavorites.add(key);
-        alert('Adicionado aos favoritos!');
+  const handleFavoriteChapter = () => {
+    const newState = toggleFavoriteChapter(bookName, chapter);
+    setIsFavorite(newState);
+    
+    if (newState) {
+      alert('✅ Capítulo adicionado aos favoritos!');
+    } else {
+      alert('❌ Capítulo removido dos favoritos!');
+    }
+  };
+
+  const handleFavoriteVerses = () => {
+    if (selectedVerses.length === 0) {
+      alert('Selecione versículos para favoritar!');
+      return;
+    }
+
+    let addedCount = 0;
+    let removedCount = 0;
+
+    selectedVerses.forEach(verseNum => {
+      const verse = verses.find(v => v.number === verseNum);
+      if (verse) {
+        const wasAdded = toggleFavoriteVerse(bookName, chapter, verseNum, verse.text);
+        if (wasAdded) {
+          addedCount++;
+          setFavoriteVerses(prev => new Set([...prev, verseNum]));
+        } else {
+          removedCount++;
+          setFavoriteVerses(prev => {
+            const newSet = new Set(prev);
+            newSet.delete(verseNum);
+            return newSet;
+          });
+        }
       }
-      return newFavorites;
     });
+
+    if (addedCount > 0) {
+      alert(`✅ ${addedCount} versículo(s) adicionado(s) aos favoritos!`);
+    }
+    if (removedCount > 0) {
+      alert(`❌ ${removedCount} versículo(s) removido(s) dos favoritos!`);
+    }
+
+    setSelectedVerses([]);
   };
 
   const handleHighlight = () => {
@@ -226,7 +280,9 @@ export default function BibleReader({ bookName, chapter, darkMode, onNavigate, t
     return highlights.has(`${bookName}-${chapter}-${verseNumber}`);
   };
 
-  const isFavorite = favorites.has(`${bookName}-${chapter}`);
+  const isVerseFav = (verseNumber: number) => {
+    return favoriteVerses.has(verseNumber);
+  };
 
   return (
     <div className="space-y-4">
@@ -250,12 +306,12 @@ export default function BibleReader({ bookName, chapter, darkMode, onNavigate, t
               <Type className={`w-6 h-6 ${darkMode ? 'text-white' : 'text-gray-700'}`} />
             </button>
 
-            {/* Botão de Favoritar ao lado da lupa */}
+            {/* Botão de Favoritar Capítulo */}
             <div className={`w-px h-6 ${darkMode ? 'bg-gray-600' : 'bg-gray-300'} mx-2`}></div>
             <button
-              onClick={handleFavorite}
+              onClick={handleFavoriteChapter}
               className={`p-2 ${darkMode ? 'hover:bg-gray-700' : 'hover:bg-gray-100'} rounded-lg transition-colors`}
-              title={isFavorite ? 'Remover dos favoritos' : 'Adicionar aos favoritos'}
+              title={isFavorite ? 'Remover capítulo dos favoritos' : 'Adicionar capítulo aos favoritos'}
             >
               <Heart 
                 className={`w-5 h-5 transition-all ${
@@ -266,7 +322,7 @@ export default function BibleReader({ bookName, chapter, darkMode, onNavigate, t
               />
             </button>
 
-            {/* Botão de Compartilhar Capítulo ao lado do coração */}
+            {/* Botão de Compartilhar Capítulo */}
             <div className="relative">
               <button
                 onClick={handleChapterShare}
@@ -429,7 +485,7 @@ export default function BibleReader({ bookName, chapter, darkMode, onNavigate, t
               <div
                 key={verse.number}
                 onClick={() => toggleVerseSelection(verse.number)}
-                className={`flex gap-3 p-3 rounded-lg cursor-pointer transition-all ${
+                className={`flex gap-3 p-3 rounded-lg cursor-pointer transition-all relative ${
                   selectedVerses.includes(verse.number)
                     ? darkMode
                       ? 'bg-blue-900/50 border-2 border-blue-500'
@@ -462,6 +518,9 @@ export default function BibleReader({ bookName, chapter, darkMode, onNavigate, t
                 >
                   {verse.text}
                 </p>
+                {isVerseFav(verse.number) && (
+                  <Heart className="w-4 h-4 text-red-500 fill-red-500 absolute top-2 right-2" />
+                )}
               </div>
             ))}
           </div>
@@ -472,15 +531,11 @@ export default function BibleReader({ bookName, chapter, darkMode, onNavigate, t
       <div className={`${darkMode ? 'bg-gray-800' : 'bg-white'} rounded-xl p-4 shadow-md relative`}>
         <div className="grid grid-cols-3 gap-3">
           <button 
-            onClick={handleFavorite}
+            onClick={handleFavoriteVerses}
             className={`flex flex-col items-center gap-2 p-3 ${darkMode ? 'hover:bg-gray-700' : 'hover:bg-gray-50'} rounded-lg transition-colors`}
           >
             <Heart 
-              className={`w-6 h-6 ${
-                favorites.has(`${bookName}-${chapter}`)
-                  ? 'fill-red-500 text-red-500'
-                  : darkMode ? 'text-red-400' : 'text-red-500'
-              }`} 
+              className={`w-6 h-6 ${darkMode ? 'text-red-400' : 'text-red-500'}`}
             />
             <span className={`text-xs font-semibold ${darkMode ? 'text-white' : 'text-gray-700'}`}>
               Favoritar

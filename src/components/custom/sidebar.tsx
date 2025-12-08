@@ -5,6 +5,8 @@ import { X, User, Camera, Heart, DollarSign, Calendar, Edit2, ShoppingCart, LogO
 import { UserProfile } from '@/lib/types';
 import { supabase } from '@/lib/supabase';
 import { useRouter } from 'next/navigation';
+import { useSidebar } from '@/contexts/SidebarContext';
+import { useWeekStreak } from '@/hooks/useWeekStreak';
 
 interface SidebarProps {
   isOpen: boolean;
@@ -12,29 +14,35 @@ interface SidebarProps {
   initialTab?: 'account' | 'contribute' | 'frequency' | 'store';
 }
 
-interface AccessRecord {
-  date: string;
-  accessed: boolean;
+interface ActivityDay {
+  activity_date: string;
 }
 
 export default function Sidebar({ isOpen, onClose, initialTab = 'account' }: SidebarProps) {
   const router = useRouter();
+  const { setIsSidebarOpen } = useSidebar();
+  
+  // Hook compartilhado para streak - SINCRONIZADO com WeekActivityStreak e HomePage
+  const { streak: consecutiveDays, serverToday } = useWeekStreak();
+  
   const [activeTab, setActiveTab] = useState<'account' | 'contribute' | 'frequency' | 'store'>(initialTab);
   const [profile, setProfile] = useState<Partial<UserProfile>>({});
   const [isEditing, setIsEditing] = useState(false);
   const [editedProfile, setEditedProfile] = useState<Partial<UserProfile>>({});
-  const [consecutiveDays, setConsecutiveDays] = useState(0);
-  const [accessHistory, setAccessHistory] = useState<AccessRecord[]>([]);
+  const [activities, setActivities] = useState<ActivityDay[]>([]);
+  const [userId, setUserId] = useState<string | null>(null);
+  const [loginCount, setLoginCount] = useState(0);
+  const [lastLoginAt, setLastLoginAt] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
-    const saved = localStorage.getItem('userProfile');
-    if (saved) {
-      const parsed = JSON.parse(saved);
-      setProfile(parsed);
-      setEditedProfile(parsed);
+    if (isOpen) {
+      loadUserProfile();
+      loadActivities();
     }
-  }, [isOpen]);
+    // Atualizar o contexto quando a sidebar abrir/fechar
+    setIsSidebarOpen(isOpen);
+  }, [isOpen, setIsSidebarOpen]);
 
   useEffect(() => {
     if (isOpen && initialTab) {
@@ -42,32 +50,115 @@ export default function Sidebar({ isOpen, onClose, initialTab = 'account' }: Sid
     }
   }, [isOpen, initialTab]);
 
-  useEffect(() => {
-    // Registrar acesso do dia atual
-    const today = new Date().toDateString();
-    const lastAccess = localStorage.getItem('lastAccessDate');
-    
-    if (lastAccess !== today) {
-      localStorage.setItem('lastAccessDate', today);
+  const loadActivities = async () => {
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+
+      if (!session) {
+        console.log('[SIDEBAR] Sem sessão, não carregando atividades');
+        return;
+      }
+
+      if (!serverToday) {
+        console.log('[SIDEBAR] Aguardando server_today...');
+        return;
+      }
+
+      // Buscar últimos 30 dias de atividade do banco de dados
+      const { data, error } = await supabase
+        .from('user_week_activity')
+        .select('activity_date')
+        .eq('user_id', session.user.id)
+        .order('activity_date', { ascending: false })
+        .limit(30);
+
+      if (error) {
+        console.error('[SIDEBAR] Erro ao carregar atividades:', error);
+        return;
+      }
+
+      setActivities(data || []);
+
+      console.log('[SIDEBAR] ✅ Atividades carregadas:', {
+        total: data?.length || 0,
+        streak: consecutiveDays,
+        serverToday,
+      });
+    } catch (err) {
+      console.error('[SIDEBAR] Exceção ao carregar atividades:', err);
+    }
+  };
+
+  const loadUserProfile = async () => {
+    try {
+      // Buscar usuário logado
+      const { data: { session } } = await supabase.auth.getSession();
       
-      // Atualizar histórico de acessos
-      const history = getAccessHistory();
-      const updatedHistory = [...history];
-      const todayIndex = updatedHistory.findIndex(
-        (record) => new Date(record.date).toDateString() === today
-      );
+      if (!session) {
+        console.log('[SIDEBAR] Nenhuma sessão encontrada');
+        return;
+      }
+
+      const currentUserId = session.user.id;
+      const token = session.access_token;
+      setUserId(currentUserId);
+
+      // SEMPRE buscar perfil do backend (fonte de verdade)
+      const response = await fetch(`/api/user-profile`, {
+        headers: {
+          'Authorization': `Bearer ${token}`,
+        },
+      });
       
-      if (todayIndex !== -1) {
-        updatedHistory[todayIndex].accessed = true;
-        localStorage.setItem('accessHistory', JSON.stringify(updatedHistory));
+      if (response.ok) {
+        const data = await response.json();
+        
+        const backendProfile = {
+          name: data.name || null,
+          religion: data.religion || null,
+          profilePhoto: data.photoUrl || null,
+          favoriteVerse: null, // Não está no backend ainda
+        };
+
+        setProfile(backendProfile);
+        setEditedProfile(backendProfile);
+        setLoginCount(data.loginCount || 0);
+        setLastLoginAt(data.lastLoginAt || null);
+
+        // Atualizar localStorage com dados do backend (backend prevalece)
+        localStorage.setItem('userProfile', JSON.stringify(backendProfile));
+        
+        console.log('[SIDEBAR] ✅ Perfil carregado do backend:', {
+          name: backendProfile.name,
+          religion: backendProfile.religion,
+          loginCount: data.loginCount,
+          lastLoginAt: data.lastLoginAt,
+        });
+      } else {
+        console.warn('[SIDEBAR] ⚠️ Erro ao buscar perfil do backend');
+        
+        // Fallback para localStorage apenas se API falhar
+        const saved = localStorage.getItem('userProfile');
+        if (saved) {
+          const parsed = JSON.parse(saved);
+          setProfile(parsed);
+          setEditedProfile(parsed);
+          console.log('[SIDEBAR] ⚠️ Usando perfil do localStorage (fallback)');
+        }
+      }
+    } catch (error) {
+      console.error('[SIDEBAR] Erro ao carregar perfil:', error);
+      
+      // Fallback para localStorage
+      const saved = localStorage.getItem('userProfile');
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        setProfile(parsed);
+        setEditedProfile(parsed);
+        console.log('[SIDEBAR] ⚠️ Usando perfil do localStorage (fallback após erro)');
       }
     }
-    
-    // Calcular dias consecutivos
-    const consecutive = calculateConsecutiveDays();
-    setConsecutiveDays(consecutive);
-    setAccessHistory(getAccessHistory());
-  }, [isOpen]);
+  };
 
   const handlePhotoUpload = (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
@@ -101,60 +192,95 @@ export default function Sidebar({ isOpen, onClose, initialTab = 'account' }: Sid
     fileInputRef.current?.click();
   };
 
-  const handleSaveProfile = () => {
-    localStorage.setItem('userProfile', JSON.stringify(editedProfile));
-    setProfile(editedProfile);
-    setIsEditing(false);
-  };
+  const handleSaveProfile = async () => {
+    try {
+      // Salvar no backend
+      if (userId) {
+        const { data: { session } } = await supabase.auth.getSession();
+        if (!session) {
+          console.error('[SIDEBAR] Sessão não encontrada');
+          return;
+        }
 
-  const handleLogout = () => {
-    // Limpar todos os dados do usuário
-    localStorage.removeItem('userProfile');
-    localStorage.removeItem('quizCompleted');
-    localStorage.removeItem('isAuthenticated');
-    localStorage.removeItem('hasActiveSubscription');
-    
-    // Recarregar a página para voltar ao estado inicial
-    window.location.reload();
-  };
+        const token = session.access_token;
 
-  const getAccessHistory = (): AccessRecord[] => {
-    const saved = localStorage.getItem('accessHistory');
-    if (saved) {
-      return JSON.parse(saved);
+        const response = await fetch('/api/user-profile', {
+          method: 'POST',
+          headers: { 
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${token}`,
+          },
+          body: JSON.stringify({
+            name: editedProfile.name || null,
+            religion: editedProfile.religion || null,
+            photoUrl: editedProfile.profilePhoto || null,
+          }),
+        });
+
+        if (response.ok) {
+          console.log('[SIDEBAR] ✅ Perfil salvo no backend');
+          
+          // Atualizar estado local com dados salvos
+          setProfile(editedProfile);
+          localStorage.setItem('userProfile', JSON.stringify(editedProfile));
+          setIsEditing(false);
+        } else {
+          console.warn('[SIDEBAR] ⚠️ Erro ao salvar no backend, salvando apenas localmente');
+          
+          // Salvar no localStorage (fallback)
+          localStorage.setItem('userProfile', JSON.stringify(editedProfile));
+          setProfile(editedProfile);
+          setIsEditing(false);
+        }
+      }
+    } catch (error) {
+      console.error('[SIDEBAR] Erro ao salvar perfil:', error);
+      // Mesmo com erro, salvar localmente
+      localStorage.setItem('userProfile', JSON.stringify(editedProfile));
+      setProfile(editedProfile);
+      setIsEditing(false);
     }
-    
-    // Criar histórico inicial dos últimos 30 dias
-    const history: AccessRecord[] = [];
+  };
+
+  const handleLogout = async () => {
+    try {
+      // Fazer logout no Supabase
+      await supabase.auth.signOut();
+      
+      // Limpar todos os dados do usuário
+      localStorage.removeItem('userProfile');
+      localStorage.removeItem('quizCompleted');
+      localStorage.removeItem('isAuthenticated');
+      localStorage.removeItem('hasActiveSubscription');
+      
+      // Redirecionar para a página de login
+      router.push('/login');
+    } catch (error) {
+      console.error('Erro ao fazer logout:', error);
+      // Mesmo com erro, redirecionar para login
+      router.push('/login');
+    }
+  };
+
+  const getLast30Days = (): { date: Date; hasActivity: boolean }[] => {
     const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    
+    const days: { date: Date; hasActivity: boolean }[] = [];
     
     for (let i = 29; i >= 0; i--) {
       const date = new Date(today);
-      date.setDate(date.getDate() - i);
-      history.push({
-        date: date.toISOString(),
-        accessed: i === 0, // Apenas hoje está acessado inicialmente
-      });
+      date.setDate(today.getDate() - i);
+      const dateString = date.toISOString().split('T')[0];
+      
+      const hasActivity = activities.some(
+        (activity) => activity.activity_date === dateString
+      );
+      
+      days.push({ date, hasActivity });
     }
     
-    localStorage.setItem('accessHistory', JSON.stringify(history));
-    return history;
-  };
-
-  const calculateConsecutiveDays = (): number => {
-    const history = getAccessHistory();
-    let consecutive = 0;
-    
-    // Contar de trás para frente (do mais recente para o mais antigo)
-    for (let i = history.length - 1; i >= 0; i--) {
-      if (history[i].accessed) {
-        consecutive++;
-      } else {
-        break;
-      }
-    }
-    
-    return consecutive;
+    return days;
   };
 
   const getLevelInfo = (days: number) => {
@@ -175,9 +301,41 @@ export default function Sidebar({ isOpen, onClose, initialTab = 'account' }: Sid
     return { name: 'Discípulo', daysNeeded: 6 - days };
   };
 
-  const totalAccessedDays = accessHistory.filter(record => record.accessed).length;
+  const totalAccessedDays = activities.length;
   const currentLevel = getLevelInfo(consecutiveDays);
   const nextLevel = getNextLevel(consecutiveDays);
+  const last30Days = getLast30Days();
+
+  // Calcular maior sequência histórica
+  const calculateMaxStreak = (): number => {
+    if (activities.length === 0) return 0;
+
+    const sortedActivities = [...activities].sort(
+      (a, b) => new Date(a.activity_date).getTime() - new Date(b.activity_date).getTime()
+    );
+
+    let maxStreak = 1;
+    let currentStreak = 1;
+
+    for (let i = 1; i < sortedActivities.length; i++) {
+      const prevDate = new Date(sortedActivities[i - 1].activity_date);
+      const currDate = new Date(sortedActivities[i].activity_date);
+      
+      const diffTime = currDate.getTime() - prevDate.getTime();
+      const diffDays = diffTime / (1000 * 60 * 60 * 24);
+
+      if (diffDays === 1) {
+        currentStreak++;
+        maxStreak = Math.max(maxStreak, currentStreak);
+      } else {
+        currentStreak = 1;
+      }
+    }
+
+    return maxStreak;
+  };
+
+  const maxStreak = calculateMaxStreak();
 
   if (!isOpen) return null;
 
@@ -215,6 +373,9 @@ export default function Sidebar({ isOpen, onClose, initialTab = 'account' }: Sid
             <div>
               <p className="font-semibold text-lg">{profile.name || 'Usuário'}</p>
               <p className="text-sm text-white/80">{profile.religion || 'Religião'}</p>
+              {loginCount > 0 && (
+                <p className="text-xs text-white/70 mt-1">{loginCount} {loginCount === 1 ? 'acesso' : 'acessos'}</p>
+              )}
             </div>
           </div>
         </div>
@@ -301,11 +462,11 @@ export default function Sidebar({ isOpen, onClose, initialTab = 'account' }: Sid
                   </div>
 
                   <div>
-                    <label className="text-sm font-semibold text-gray-700">Versículo Favorito</label>
-                    <p className="mt-1 text-gray-900 italic">
-                      {profile.favoriteVerse || 'Nenhum versículo favorito ainda'}
-                    </p>
+                    <label className="text-sm font-semibold text-gray-700">Religião</label>
+                    <p className="mt-1 text-gray-900">{profile.religion || 'Não informada'}</p>
                   </div>
+
+
 
                   <button
                     onClick={() => setIsEditing(true)}
@@ -337,13 +498,12 @@ export default function Sidebar({ isOpen, onClose, initialTab = 'account' }: Sid
                   </div>
 
                   <div>
-                    <label className="text-sm font-semibold text-gray-700">Versículo Favorito</label>
-                    <textarea
-                      value={editedProfile.favoriteVerse || ''}
-                      onChange={(e) => setEditedProfile({ ...editedProfile, favoriteVerse: e.target.value })}
-                      rows={3}
-                      className="mt-1 w-full px-4 py-2 border-2 border-gray-200 rounded-lg focus:border-amber-400 focus:outline-none resize-none"
-                      placeholder="Ex: João 3:16"
+                    <label className="text-sm font-semibold text-gray-700">Religião</label>
+                    <input
+                      type="text"
+                      value={editedProfile.religion || ''}
+                      onChange={(e) => setEditedProfile({ ...editedProfile, religion: e.target.value })}
+                      className="mt-1 w-full px-4 py-2 border-2 border-gray-200 rounded-lg focus:border-amber-400 focus:outline-none"
                     />
                   </div>
 
@@ -466,13 +626,7 @@ export default function Sidebar({ isOpen, onClose, initialTab = 'account' }: Sid
                 
                 <div className="bg-purple-50 rounded-xl p-4 text-center border-2 border-purple-100">
                   <Award className="w-6 h-6 text-purple-600 mx-auto mb-2" />
-                  <p className="text-2xl font-bold text-purple-600">{Math.max(...accessHistory.map((_, i) => {
-                    let count = 0;
-                    for (let j = i; j < accessHistory.length && accessHistory[j].accessed; j++) {
-                      count++;
-                    }
-                    return count;
-                  }))}</p>
+                  <p className="text-2xl font-bold text-purple-600">{maxStreak}</p>
                   <p className="text-xs text-gray-600">Maior Sequência</p>
                 </div>
               </div>
@@ -484,16 +638,15 @@ export default function Sidebar({ isOpen, onClose, initialTab = 'account' }: Sid
                   Últimos 30 dias
                 </p>
                 <div className="grid grid-cols-7 gap-2">
-                  {accessHistory.map((day, index) => {
-                    const date = new Date(day.date);
-                    const dayOfMonth = date.getDate();
-                    const isToday = date.toDateString() === new Date().toDateString();
+                  {last30Days.map((day, index) => {
+                    const dayOfMonth = day.date.getDate();
+                    const isToday = day.date.toDateString() === new Date().toDateString();
                     
                     return (
                       <div key={index} className="text-center">
                         <div
                           className={`w-full aspect-square rounded-lg mb-1 transition-all duration-300 flex items-center justify-center text-xs font-semibold ${
-                            day.accessed
+                            day.hasActivity
                               ? 'bg-gradient-to-br from-amber-400 to-amber-500 text-white shadow-md transform hover:scale-110'
                               : 'bg-gray-100 text-gray-400 hover:bg-gray-200'
                           } ${isToday ? 'ring-2 ring-amber-600 ring-offset-2' : ''}`}

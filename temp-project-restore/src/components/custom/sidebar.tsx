@@ -107,15 +107,24 @@ export default function Sidebar({ isOpen, onClose, initialTab = 'account' }: Sid
     setIsEditing(false);
   };
 
-  const handleLogout = () => {
-    // Limpar todos os dados do usuário
-    localStorage.removeItem('userProfile');
-    localStorage.removeItem('quizCompleted');
-    localStorage.removeItem('isAuthenticated');
-    localStorage.removeItem('hasActiveSubscription');
-    
-    // Recarregar a página para voltar ao estado inicial
-    window.location.reload();
+  const handleLogout = async () => {
+    try {
+      // Fazer logout no Supabase
+      await supabase.auth.signOut();
+      
+      // Limpar todos os dados do usuário
+      localStorage.removeItem('userProfile');
+      localStorage.removeItem('quizCompleted');
+      localStorage.removeItem('isAuthenticated');
+      localStorage.removeItem('hasActiveSubscription');
+      
+      // Redirecionar para a página de login
+      router.push('/login');
+    } catch (error) {
+      console.error('Erro ao fazer logout:', error);
+      // Mesmo com erro, redirecionar para login
+      router.push('/login');
+    }
   };
 
   const getAccessHistory = (): AccessRecord[] => {
