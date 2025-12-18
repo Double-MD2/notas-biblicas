@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
+import { checkSupabaseReady, safeSupabaseQuery } from '@/lib/supabase-guard';
 import { supabase } from '@/lib/supabase';
 
 interface ActivityDay {
@@ -69,45 +70,41 @@ export function useWeekStreak() {
 
   const loadStreak = async () => {
     try {
-      // Verificar se o cliente Supabase está configurado
-      if (!supabase) {
-        console.warn('[useWeekStreak] Cliente Supabase não configurado');
+      // VALIDAÇÃO CRÍTICA: Verificar se Supabase está pronto
+      const guard = await checkSupabaseReady();
+
+      if (!guard.isReady) {
+        console.log('[useWeekStreak] ⏭️ Supabase não está pronto:', guard.error);
+        console.log('[useWeekStreak] Aguardando autenticação antes de carregar streak');
+        setStreak(0);
         setLoading(false);
         return;
       }
 
-      const { data: { session }, error: sessionError } = await supabase.auth.getSession();
-
-      if (sessionError) {
-        console.error('[useWeekStreak] Erro ao obter sessão:', sessionError);
-        setLoading(false);
-        return;
-      }
-
-      if (!session) {
-        console.log('[useWeekStreak] Sem sessão, não carregando streak');
-        setLoading(false);
-        return;
-      }
+      const userId = guard.user!.id;
+      console.log('[useWeekStreak] ✅ Carregando streak para usuário:', userId);
 
       // Buscar últimos 365 dias de atividade para calcular streak
-      const { data, error } = await supabase
-        .from('user_week_activity')
-        .select('activity_date')
-        .eq('user_id', session.user.id)
-        .order('activity_date', { ascending: false })
-        .limit(365);
+      const { data, error } = await safeSupabaseQuery(
+        supabase
+          .from('user_week_activity')
+          .select('activity_date')
+          .eq('user_id', userId)
+          .order('activity_date', { ascending: false })
+          .limit(365)
+      );
 
       if (error) {
-        // Tratar erro de forma mais específica
-        if (error.message?.includes('Failed to fetch')) {
-          console.warn('[useWeekStreak] Erro de conexão ao carregar atividades. Tentando novamente...');
-          // Tentar novamente após 2 segundos
+        console.log('[useWeekStreak] ⚠️ Erro ao carregar atividades:', error);
+        
+        // Se erro de conexão, tentar novamente após 2 segundos
+        if (error.includes('Failed to fetch') || error.includes('fetch')) {
+          console.log('[useWeekStreak] Tentando novamente em 2s...');
           setTimeout(() => loadStreak(), 2000);
           return;
         }
         
-        console.error('[useWeekStreak] Erro ao carregar atividades:', error);
+        setStreak(0);
         setLoading(false);
         return;
       }
@@ -120,15 +117,8 @@ export function useWeekStreak() {
 
       setLoading(false);
     } catch (err) {
-      // Tratamento de exceções de rede
-      if (err instanceof TypeError && err.message.includes('Failed to fetch')) {
-        console.warn('[useWeekStreak] Erro de rede detectado. Modo offline ou problema de conexão.');
-        setStreak(0);
-        setLoading(false);
-        return;
-      }
-      
-      console.error('[useWeekStreak] Exceção ao carregar streak:', err);
+      console.log('[useWeekStreak] ⚠️ Exceção ao carregar streak (não crítico)');
+      setStreak(0);
       setLoading(false);
     }
   };

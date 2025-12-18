@@ -2,11 +2,15 @@
 
 import { useEffect, useRef } from 'react';
 import { callIncrementLoginStats } from '@/lib/auth-utils';
-import { supabase } from '@/lib/supabase';
+import { checkSupabaseReady } from '@/lib/supabase-guard';
 
 /**
  * Hook que chama increment_login_stats APENAS 1 vez por sessão
  * Usa bloqueio em memória para evitar chamadas duplicadas
+ * 
+ * SEGURANÇA:
+ * - Valida conexão e autenticação antes de executar
+ * - Não executa se Supabase estiver indisponível
  */
 export function useIncrementLoginOnce() {
   const hasCalledRef = useRef(false);
@@ -27,11 +31,12 @@ export function useIncrementLoginOnce() {
         // Marcar como "chamando" para evitar race conditions
         isCallingRef.current = true;
 
-        // Verificar se há usuário autenticado
-        const { data: { session } } = await supabase.auth.getSession();
+        // VALIDAÇÃO CRÍTICA: Verificar se Supabase está pronto
+        const guard = await checkSupabaseReady();
 
-        if (!session) {
-          console.log('[useIncrementLoginOnce] ⏭️  Nenhuma sessão encontrada - não incrementando');
+        if (!guard.isReady) {
+          console.log('[useIncrementLoginOnce] ⏭️ Supabase não está pronto:', guard.error);
+          console.log('[useIncrementLoginOnce] Aguardando autenticação antes de incrementar');
           isCallingRef.current = false;
           return;
         }
@@ -45,10 +50,10 @@ export function useIncrementLoginOnce() {
           console.log('[useIncrementLoginOnce] ✅ Login incrementado com sucesso');
           hasCalledRef.current = true; // Marcar como executado
         } else {
-          console.error('[useIncrementLoginOnce] ❌ Erro ao incrementar login:', result.error);
+          console.log('[useIncrementLoginOnce] ⚠️ Erro ao incrementar login:', result.error);
         }
       } catch (error) {
-        console.error('[useIncrementLoginOnce] ❌ Erro inesperado:', error);
+        console.log('[useIncrementLoginOnce] ⚠️ Erro inesperado (não crítico)');
       } finally {
         isCallingRef.current = false;
       }

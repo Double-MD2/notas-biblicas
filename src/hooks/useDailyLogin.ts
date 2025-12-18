@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useRef, useCallback } from 'react';
-import { supabase } from '@/lib/supabase';
+import { safeSupabaseRPC, checkSupabaseReady } from '@/lib/supabase-guard';
 
 /**
  * Hook para registrar login diário automaticamente
@@ -13,6 +13,11 @@ import { supabase } from '@/lib/supabase';
  * - Ao retornar do background (visibilitychange)
  * 
  * Throttle: 2 minutos entre chamadas para reduzir ruído de rede
+ * 
+ * SEGURANÇA:
+ * - Valida conexão e autenticação antes de executar
+ * - Não executa se Supabase estiver indisponível
+ * - Não gera erros no console em caso de falha
  */
 
 const THROTTLE_INTERVAL = 2 * 60 * 1000; // 2 minutos em ms
@@ -39,30 +44,25 @@ export function useDailyLogin() {
     try {
       isCallingRef.current = true;
 
-      // Verificar se tem sessão válida
-      const { data: { session }, error: sessionError } = await supabase.auth.getSession();
+      // VALIDAÇÃO CRÍTICA: Verificar se Supabase está pronto
+      const guard = await checkSupabaseReady();
 
-      if (sessionError || !session) {
-        console.log('[DAILY_LOGIN] Sem sessão válida, não registrando login');
+      if (!guard.isReady) {
+        console.log('[DAILY_LOGIN] ⏭️ Supabase não está pronto:', guard.error);
+        console.log('[DAILY_LOGIN] Aguardando autenticação antes de registrar login');
         return false;
       }
 
       console.log('[DAILY_LOGIN] Chamando RPC log_daily_login...');
       
-      // Chamar função RPC (sem parâmetros - usa auth.uid() no servidor)
-      const { data, error } = await supabase.rpc('log_daily_login');
+      // Chamar função RPC de forma segura
+      const { data, error } = await safeSupabaseRPC('log_daily_login');
 
       if (error) {
-        // Erro 401/403 = sem permissão, não tentar novamente
-        if (error.code === 'PGRST301' || error.message.includes('401') || error.message.includes('403')) {
-          console.error('[DAILY_LOGIN] ❌ Sem permissão (401/403), não tentando novamente');
-          return false;
-        }
+        console.log('[DAILY_LOGIN] ⚠️ Não foi possível registrar login:', error);
 
-        // Erro de rede/timeout = tentar novamente com backoff exponencial
-        console.error('[DAILY_LOGIN] ⚠️ Erro na chamada RPC:', error);
-
-        if (retryCount < 3) {
+        // Tentar novamente apenas se for erro de rede (não erro de autenticação)
+        if (!error.includes('401') && !error.includes('403') && !error.includes('JWT') && retryCount < 3) {
           const backoffDelay = Math.pow(2, retryCount) * 1000; // 1s, 2s, 4s
           console.log(`[DAILY_LOGIN] Tentando novamente em ${backoffDelay}ms (tentativa ${retryCount + 1}/3)`);
 
@@ -81,13 +81,13 @@ export function useDailyLogin() {
       // Telemetria
       if (typeof window !== 'undefined' && (window as any).gtag) {
         (window as any).gtag('event', 'daily_login_logged', {
-          user_id: session.user.id,
+          user_id: guard.user?.id,
         });
       }
 
       return true;
     } catch (err) {
-      console.error('[DAILY_LOGIN] ❌ Exceção ao registrar login:', err);
+      console.log('[DAILY_LOGIN] ⚠️ Erro ao registrar login (será tentado novamente)');
       return false;
     } finally {
       isCallingRef.current = false;

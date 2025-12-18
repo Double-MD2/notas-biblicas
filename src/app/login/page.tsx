@@ -2,6 +2,7 @@
 
 import { useState } from 'react';
 import { supabase } from '@/lib/supabase';
+import { checkSupabaseReady } from '@/lib/supabase-guard';
 import { useRouter } from 'next/navigation';
 import { useDailyLogin } from '@/hooks/useDailyLogin';
 
@@ -120,17 +121,19 @@ export default function LoginPage() {
         console.log('[LOGIN] Aguardando 1s para sincronização de cookies...');
         await new Promise(resolve => setTimeout(resolve, 1000));
 
-        // Verificar se a sessão foi salva
-        const { data: { session: savedSession } } = await supabase.auth.getSession();
+        // Verificar se a sessão foi salva usando validação segura
+        const guard = await checkSupabaseReady();
 
-        if (savedSession) {
+        if (guard.isReady && guard.session) {
           console.log('[LOGIN] ✅ Sessão confirmada!');
           
-          // Registrar login diário no Supabase
-          await logDailyLogin();
+          // Registrar login diário no Supabase (não bloqueia o fluxo)
+          logDailyLogin().catch(err => {
+            console.log('[LOGIN] ⚠️ Erro ao registrar login (não crítico):', err);
+          });
           
           // Chamar login-callback para incrementar loginCount e obter redirecionamento
-          await handleLoginCallback(savedSession.user.id, savedSession.access_token);
+          await handleLoginCallback(guard.session.user.id, guard.session.access_token);
         } else {
           console.error('[LOGIN] ❌ Sessão NÃO foi persistida!');
           setError('Erro ao salvar sessão. Tente novamente.');
@@ -170,8 +173,10 @@ export default function LoginPage() {
         console.log('[SIGNUP] ✅ Cadastro bem-sucedido!');
         console.log('[SIGNUP] User ID:', data.session.user.id);
         
-        // Registrar login diário no Supabase
-        await logDailyLogin();
+        // Registrar login diário no Supabase (não bloqueia o fluxo)
+        logDailyLogin().catch(err => {
+          console.log('[SIGNUP] ⚠️ Erro ao registrar login (não crítico):', err);
+        });
         
         // Telemetria
         if (typeof window !== 'undefined' && (window as any).gtag) {

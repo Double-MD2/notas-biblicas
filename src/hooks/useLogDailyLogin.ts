@@ -1,12 +1,17 @@
 'use client';
 
 import { useEffect, useRef } from 'react';
-import { supabase } from '@/lib/supabase';
+import { safeSupabaseRPC, checkSupabaseReady } from '@/lib/supabase-guard';
 
 /**
  * Hook que chama log_daily_login APENAS 1 vez por sessão
  * Registra o acesso do dia no fuso America/Sao_Paulo
  * Idempotente: não duplica registros no mesmo dia
+ * 
+ * SEGURANÇA:
+ * - Valida conexão e autenticação antes de executar
+ * - Não executa se Supabase estiver indisponível
+ * - Não gera erros no console em caso de falha
  */
 export function useLogDailyLogin() {
   const hasCalledRef = useRef(false);
@@ -27,25 +32,26 @@ export function useLogDailyLogin() {
         // Marcar como "chamando" para evitar race conditions
         isCallingRef.current = true;
 
-        // Verificar se há usuário autenticado
-        const { data: { session } } = await supabase.auth.getSession();
+        // VALIDAÇÃO CRÍTICA: Verificar se Supabase está pronto
+        const guard = await checkSupabaseReady();
 
-        if (!session) {
-          console.log('[useLogDailyLogin] ⏭️  Nenhuma sessão encontrada - não registrando');
+        if (!guard.isReady) {
+          console.log('[useLogDailyLogin] ⏭️ Supabase não está pronto:', guard.error);
+          console.log('[useLogDailyLogin] Aguardando autenticação antes de registrar');
           isCallingRef.current = false;
           return;
         }
 
         console.log('[useLogDailyLogin] 🚀 Chamando log_daily_login...');
 
-        // Chamar a RPC log_daily_login (idempotente)
-        const { data, error } = await supabase.rpc('log_daily_login');
+        // Chamar a RPC log_daily_login de forma segura
+        const { data, error } = await safeSupabaseRPC('log_daily_login');
 
         if (error) {
-          console.error('[useLogDailyLogin] ❌ Erro ao chamar log_daily_login:', error);
+          console.log('[useLogDailyLogin] ⚠️ Não foi possível registrar login:', error);
           
-          // Se erro 401/403, redirecionar para login
-          if (error.code === 'PGRST301' || error.message?.includes('JWT')) {
+          // Se erro de autenticação, redirecionar para login
+          if (error.includes('401') || error.includes('403') || error.includes('JWT')) {
             console.log('[useLogDailyLogin] 🔒 Sessão expirada - redirecionando para login');
             window.location.href = '/login';
             return;
@@ -55,7 +61,7 @@ export function useLogDailyLogin() {
           hasCalledRef.current = true; // Marcar como executado
         }
       } catch (error) {
-        console.error('[useLogDailyLogin] ❌ Erro inesperado:', error);
+        console.log('[useLogDailyLogin] ⚠️ Erro ao registrar login (não crítico)');
       } finally {
         isCallingRef.current = false;
       }

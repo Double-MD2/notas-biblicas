@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useEffect } from 'react';
+import { checkSupabaseReady, safeSupabaseQuery } from '@/lib/supabase-guard';
 import { supabase } from '@/lib/supabase';
 
 export interface SubscriptionStatus {
@@ -19,6 +20,11 @@ export interface SubscriptionStatus {
  * 1. Verifica se está no trial de 3 dias (prioridade máxima)
  * 2. Se não estiver no trial, verifica assinatura ativa
  * 3. Se nenhuma das duas, bloqueia acesso premium
+ * 
+ * SEGURANÇA:
+ * - Valida conexão e autenticação antes de qualquer chamada
+ * - Em caso de erro, assume estado seguro (SEM acesso premium)
+ * - Não libera acesso indevido em caso de falha de rede
  * 
  * TRIAL:
  * - Todo usuário novo recebe 3 dias de trial gratuito
@@ -44,11 +50,12 @@ export function useSubscription() {
     try {
       console.log('[useSubscription] 🔍 Iniciando verificação de status...');
       
-      // 1. Verificar se usuário está logado
-      const { data: { session } } = await supabase.auth.getSession();
+      // VALIDAÇÃO CRÍTICA: Verificar se Supabase está pronto
+      const guard = await checkSupabaseReady();
       
-      if (!session) {
-        console.log('[useSubscription] ❌ Sem sessão - usuário não logado');
+      if (!guard.isReady) {
+        console.log('[useSubscription] ⚠️ Supabase não está pronto:', guard.error);
+        console.log('[useSubscription] ❌ ESTADO SEGURO: Bloqueando acesso premium');
         setStatus({
           isActive: false,
           isInTrial: false,
@@ -60,8 +67,8 @@ export function useSubscription() {
         return;
       }
 
-      const userId = session.user.id;
-      console.log('[useSubscription] ✅ Usuário logado:', userId);
+      const userId = guard.user!.id;
+      console.log('[useSubscription] ✅ Usuário autenticado:', userId);
 
       // 2. PRIORIDADE 1: Verificar período de trial (3 dias)
       const trialStatus = await checkTrialStatus(userId);
@@ -113,6 +120,8 @@ export function useSubscription() {
       }
     } catch (error) {
       console.error('[useSubscription] ❌ Erro ao verificar status:', error);
+      console.log('[useSubscription] ❌ ESTADO SEGURO: Bloqueando acesso premium');
+      // ESTADO SEGURO: Em caso de erro, bloquear acesso
       setStatus({
         isActive: false,
         isInTrial: false,
@@ -128,6 +137,8 @@ export function useSubscription() {
    * Verifica se usuário ainda está no período de trial de 3 dias
    * Usa user_metadata do Supabase Auth para armazenar trial_started_at
    * Usa created_at da conta como fallback para contas antigas
+   * 
+   * SEGURANÇA: Em caso de erro, retorna trial EXPIRADO (estado seguro)
    */
   const checkTrialStatus = async (userId: string): Promise<{ 
     isInTrial: boolean; 
@@ -137,13 +148,16 @@ export function useSubscription() {
     try {
       console.log('[checkTrialStatus] 🔍 Verificando trial para usuário:', userId);
       
-      // Buscar dados do usuário no Auth (força refresh para pegar dados mais recentes)
-      const { data: { user }, error } = await supabase.auth.getUser();
+      // VALIDAÇÃO: Verificar se Supabase está pronto
+      const guard = await checkSupabaseReady();
 
-      if (error || !user) {
-        console.error('[checkTrialStatus] ❌ Erro ao buscar usuário:', error);
+      if (!guard.isReady) {
+        console.log('[checkTrialStatus] ⚠️ Supabase não está pronto');
+        console.log('[checkTrialStatus] ❌ ESTADO SEGURO: Trial expirado');
         return { isInTrial: false, trialEndsAt: null, daysRemaining: 0 };
       }
+
+      const user = guard.user!;
 
       console.log('[checkTrialStatus] 📋 User metadata completo:', JSON.stringify(user.user_metadata, null, 2));
       console.log('[checkTrialStatus] 📅 Conta criada em:', user.created_at);
@@ -173,9 +187,13 @@ export function useSubscription() {
           trialEndsAt.setDate(trialEndsAt.getDate() + 3);
           
           // Opcionalmente, registrar no metadata para não recalcular sempre
-          await supabase.auth.updateUser({
-            data: { trial_started_at: accountCreatedAt.toISOString() }
-          });
+          try {
+            await supabase.auth.updateUser({
+              data: { trial_started_at: accountCreatedAt.toISOString() }
+            });
+          } catch (updateError) {
+            console.log('[checkTrialStatus] ⚠️ Erro ao atualizar metadata (não crítico)');
+          }
           
           return { 
             isInTrial: false, 
@@ -192,14 +210,13 @@ export function useSubscription() {
         console.log('[checkTrialStatus] ⏰ Trial iniciado em:', nowISO);
         
         // Registrar início do trial no user_metadata
-        const { data: updatedUser, error: updateError } = await supabase.auth.updateUser({
-          data: { trial_started_at: nowISO }
-        });
-
-        if (updateError) {
-          console.error('[checkTrialStatus] ❌ Erro ao registrar trial:', updateError);
-        } else {
+        try {
+          await supabase.auth.updateUser({
+            data: { trial_started_at: nowISO }
+          });
           console.log('[checkTrialStatus] ✅ Trial registrado com sucesso!');
+        } catch (updateError) {
+          console.log('[checkTrialStatus] ⚠️ Erro ao registrar trial (não crítico)');
         }
 
         // Calcular data de término (3 dias a partir da criação da conta)
@@ -252,6 +269,8 @@ export function useSubscription() {
       };
     } catch (error) {
       console.error('[checkTrialStatus] ❌ Erro inesperado:', error);
+      console.log('[checkTrialStatus] ❌ ESTADO SEGURO: Trial expirado');
+      // ESTADO SEGURO: Em caso de erro, considerar trial expirado
       return { isInTrial: false, trialEndsAt: null, daysRemaining: 0 };
     }
   };
@@ -259,20 +278,35 @@ export function useSubscription() {
   /**
    * Verifica se usuário tem assinatura ativa no Supabase
    * Consulta tabela user_subscriptions atualizada pelo webhook da Kirvano
+   * 
+   * SEGURANÇA: Em caso de erro, retorna NULL (sem assinatura - estado seguro)
    */
   const checkActiveSubscription = async (userId: string): Promise<{ planName: string } | null> => {
     try {
       console.log('[checkActiveSubscription] 🔍 Verificando assinatura para:', userId);
       
-      const { data: subscription, error } = await supabase
-        .from('user_subscriptions')
-        .select('*')
-        .eq('user_id', userId)
-        .eq('status', 'active')
-        .single();
+      // VALIDAÇÃO: Verificar se Supabase está pronto
+      const guard = await checkSupabaseReady();
+
+      if (!guard.isReady) {
+        console.log('[checkActiveSubscription] ⚠️ Supabase não está pronto');
+        console.log('[checkActiveSubscription] ❌ ESTADO SEGURO: Sem assinatura');
+        return null;
+      }
+
+      // Usar wrapper seguro para query
+      const { data: subscription, error } = await safeSupabaseQuery(
+        supabase
+          .from('user_subscriptions')
+          .select('*')
+          .eq('user_id', userId)
+          .eq('status', 'active')
+          .single()
+      );
 
       if (error) {
-        console.log('[checkActiveSubscription] ⚠️ Erro ao buscar assinatura:', error.message);
+        console.log('[checkActiveSubscription] ⚠️ Erro ao buscar assinatura:', error);
+        console.log('[checkActiveSubscription] ❌ ESTADO SEGURO: Sem assinatura');
         return null;
       }
 
@@ -301,6 +335,8 @@ export function useSubscription() {
       };
     } catch (error) {
       console.error('[checkActiveSubscription] ❌ Erro inesperado:', error);
+      console.log('[checkActiveSubscription] ❌ ESTADO SEGURO: Sem assinatura');
+      // ESTADO SEGURO: Em caso de erro, considerar sem assinatura
       return null;
     }
   };
