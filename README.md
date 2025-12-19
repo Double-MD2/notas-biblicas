@@ -2,23 +2,7 @@ This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-
 
 ## Getting Started
 
-### 1. Configurar variáveis de ambiente
-
-Copie o arquivo `.env.local.example` para `.env.local` e configure suas credenciais do Supabase:
-
-```bash
-cp .env.local.example .env.local
-```
-
-Edite `.env.local` com suas credenciais reais do Supabase (encontre em https://app.supabase.com/project/_/settings/api).
-
-### 2. Instalar dependências
-
-```bash
-npm install
-```
-
-### 3. Rodar o servidor de desenvolvimento
+First, run the development server:
 
 ```bash
 npm run dev
@@ -30,7 +14,7 @@ pnpm dev
 bun dev
 ```
 
-Abra [http://localhost:3000](http://localhost:3000) no seu navegador para ver o resultado.
+Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
 
 You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
 
