@@ -6,6 +6,12 @@ import { DailyContent } from '@/lib/types';
 import Sidebar from '@/components/custom/sidebar';
 import { supabase } from '@/lib/supabase';
 import { useRouter } from 'next/navigation';
+import { useIncrementLoginOnce } from '@/hooks/useIncrementLoginOnce';
+import { useLogDailyLogin } from '@/hooks/useLogDailyLogin';
+import WeekActivityStreak from '@/components/custom/WeekActivityStreak';
+import { useWeekStreak } from '@/hooks/useWeekStreak';
+import { useSubscription } from '@/hooks/useSubscription';
+import PrayerFloatingButton from '@/components/custom/PrayerFloatingButton';
 
 const mockContents: DailyContent[] = [
   {
@@ -62,16 +68,56 @@ const mockContents: DailyContent[] = [
   },
 ];
 
-const weekDays = ['D', 'S', 'T', 'Q', 'Q', 'S', 'S'];
+/**
+ * Retorna a data atual no fuso America/Sao_Paulo no formato YYYY-MM-DD
+ * CRÍTICO: Garante que o "dia atual" seja sempre baseado no horário local do usuário
+ */
+const getTodayInBrazil = (): string => {
+  const nowUTC = new Date();
+  
+  // Converter para string no fuso America/Sao_Paulo
+  const brazilDateString = nowUTC.toLocaleString('en-US', { 
+    timeZone: 'America/Sao_Paulo',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit'
+  });
+  
+  // Parsear a string no formato MM/DD/YYYY para YYYY-MM-DD
+  const [month, day, year] = brazilDateString.split(/[\\/,\\s]+/);
+  return `${year}-${month.padStart(2, '0')}-${day.padStart(2, '0')}`;
+};
+
+/**
+ * Cria um objeto Date representando uma data específica no fuso America/Sao_Paulo
+ * @param dateString - Data no formato YYYY-MM-DD
+ */
+const createBrazilDate = (dateString: string): Date => {
+  // Criar data no fuso local do Brasil (sem conversão UTC)
+  const [year, month, day] = dateString.split('-').map(Number);
+  const date = new Date(year, month - 1, day, 0, 0, 0, 0);
+  return date;
+};
 
 export default function HomePage() {
   const router = useRouter();
+  
+  // Hook para incrementar login stats 1x por sessão
+  useIncrementLoginOnce();
+  
+  // Hook para registrar acesso diário no Supabase (log_daily_login RPC)
+  useLogDailyLogin();
+  
+  // Hook compartilhado para streak - SINCRONIZADO com WeekActivityStreak
+  const { streak } = useWeekStreak();
+  
+  // Hook de verificação de assinatura
+  const { isActive: hasAccess, isInTrial, loading: subscriptionLoading } = useSubscription();
+  
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [sidebarInitialTab, setSidebarInitialTab] = useState<'account' | 'contribute' | 'frequency' | 'store'>('account');
   const [contents, setContents] = useState<DailyContent[]>(mockContents);
-  const [selectedDay, setSelectedDay] = useState(new Date().getDay());
   const [expandedCard, setExpandedCard] = useState<string | null>(null);
-  const [consecutiveDays, setConsecutiveDays] = useState(0);
   const [userId, setUserId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [weeklyAccess, setWeeklyAccess] = useState<boolean[]>([false, false, false, false, false, false, false]);
@@ -86,13 +132,49 @@ export default function HomePage() {
       const { data: { session } } = await supabase.auth.getSession();
 
       if (!session) {
-        console.log('Nenhuma sessão encontrada');
+        console.log('[HOME] Nenhuma sessão encontrada - redirecionando para login');
         router.push('/login');
         return;
       }
 
       const currentUserId = session.user.id;
       setUserId(currentUserId);
+
+      // Verificar se quiz foi completo
+      try {
+        const quizResponse = await fetch(`/api/quiz-status?userId=${currentUserId}`);
+        
+        if (quizResponse.ok) {
+          const quizStatus = await quizResponse.json();
+          
+          if (!quizStatus.completed) {
+            // Quiz não completo - bloquear acesso e redirecionar
+            console.log('[HOME] ❌ Quiz não completo - bloqueando acesso');
+            
+            // Telemetria
+            if (typeof window !== 'undefined' && (window as any).gtag) {
+              (window as any).gtag('event', 'blocked_home_due_to_incomplete_quiz', {
+                user_id: currentUserId,
+                current_step: quizStatus.currentStep || 0,
+              });
+            }
+            
+            router.push('/onboarding');
+            return;
+          }
+          
+          console.log('[HOME] ✅ Quiz completo - acesso permitido');
+          
+          // Telemetria
+          if (typeof window !== 'undefined' && (window as any).gtag) {
+            (window as any).gtag('event', 'home_entered', {
+              user_id: currentUserId,
+            });
+          }
+        }
+      } catch (quizError) {
+        console.warn('[HOME] ⚠️ Erro ao verificar quiz (permitindo acesso):', quizError);
+      }
 
       // Buscar dados do usuário do banco de dados (OPCIONAL - não bloqueia se falhar)
       try {
@@ -101,13 +183,8 @@ export default function HomePage() {
           const data = await response.json();
 
           if (data.userData) {
-            setConsecutiveDays(data.userData.consecutive_days || 0);
-
-            // Se tem histórico, calcular dias consecutivos
+            // Se tem histórico, calcular acessos da semana atual
             if (data.accessHistory && data.accessHistory.length > 0) {
-              const consecutive = calculateConsecutiveDaysFromHistory(data.accessHistory);
-              setConsecutiveDays(consecutive);
-              
               // Calcular acessos da semana atual
               const weekAccess = calculateWeeklyAccess(data.accessHistory);
               setWeeklyAccess(weekAccess);
@@ -162,8 +239,14 @@ export default function HomePage() {
     }
   };
 
+  /**
+   * Calcula quais dias da semana atual foram acessados
+   * CORREÇÃO: Usa getTodayInBrazil() para determinar a semana atual no fuso local
+   */
   const calculateWeeklyAccess = (history: any[]): boolean[] => {
-    const today = new Date();
+    // Obter "hoje" no fuso America/Sao_Paulo
+    const todayString = getTodayInBrazil();
+    const today = createBrazilDate(todayString);
     const currentDayOfWeek = today.getDay(); // 0 = Domingo, 6 = Sábado
     
     // Encontrar o domingo da semana atual
@@ -178,7 +261,7 @@ export default function HomePage() {
     for (let i = 0; i < 7; i++) {
       const checkDate = new Date(startOfWeek);
       checkDate.setDate(startOfWeek.getDate() + i);
-      const dateString = checkDate.toISOString().split('T')[0];
+      const dateString = `${checkDate.getFullYear()}-${String(checkDate.getMonth() + 1).padStart(2, '0')}-${String(checkDate.getDate()).padStart(2, '0')}`;
       
       // Verificar se existe registro de acesso para este dia
       const accessed = history.some(record => {
@@ -194,6 +277,9 @@ export default function HomePage() {
 
   const createInitialUserData = async (currentUserId: string) => {
     try {
+      // Obter "hoje" no fuso America/Sao_Paulo
+      const todayString = getTodayInBrazil();
+      
       // Criar dados iniciais do usuário
       await fetch('/api/user', {
         method: 'POST',
@@ -207,27 +293,27 @@ export default function HomePage() {
       });
 
       // Criar histórico inicial dos últimos 30 dias
-      const today = new Date();
+      const today = createBrazilDate(todayString);
       for (let i = 29; i >= 0; i--) {
         const date = new Date(today);
         date.setDate(date.getDate() - i);
+        const dateString = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
         
         await fetch('/api/access-history', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             userId: currentUserId,
-            accessDate: date.toISOString().split('T')[0],
+            accessDate: dateString,
             accessed: i === 0 // Apenas hoje está acessado
           })
         });
       }
-
-      setConsecutiveDays(1);
       
       // Atualizar acesso semanal
       const weekAccess = [false, false, false, false, false, false, false];
-      weekAccess[new Date().getDay()] = true;
+      const todayDate = createBrazilDate(todayString);
+      weekAccess[todayDate.getDay()] = true;
       setWeeklyAccess(weekAccess);
     } catch (error) {
       console.error('Erro ao criar dados iniciais:', error);
@@ -236,26 +322,24 @@ export default function HomePage() {
 
   const registerTodayAccess = async (currentUserId: string) => {
     try {
-      const today = new Date().toISOString().split('T')[0];
+      // Obter "hoje" no fuso America/Sao_Paulo
+      const todayString = getTodayInBrazil();
       
       await fetch('/api/access-history', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           userId: currentUserId,
-          accessDate: today,
+          accessDate: todayString,
           accessed: true
         })
       });
 
-      // Buscar histórico atualizado e recalcular dias consecutivos
+      // Buscar histórico atualizado e recalcular acessos semanais
       const response = await fetch(`/api/access-history?userId=${currentUserId}`);
       const history = await response.json();
       
       if (history && history.length > 0) {
-        const consecutive = calculateConsecutiveDaysFromHistory(history);
-        setConsecutiveDays(consecutive);
-        
         // Atualizar acesso semanal
         const weekAccess = calculateWeeklyAccess(history);
         setWeeklyAccess(weekAccess);
@@ -266,7 +350,7 @@ export default function HomePage() {
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             userId: currentUserId,
-            consecutiveDays: consecutive,
+            consecutiveDays: streak, // Usar streak do hook compartilhado
             lastAccessDate: new Date().toISOString(),
             onboardingCompleted: true
           })
@@ -275,36 +359,6 @@ export default function HomePage() {
     } catch (error) {
       console.error('Erro ao registrar acesso:', error);
     }
-  };
-
-  const calculateConsecutiveDaysFromHistory = (history: any[]): number => {
-    if (!history || history.length === 0) return 0;
-
-    // Ordenar por data decrescente (mais recente primeiro)
-    const sortedHistory = [...history].sort((a, b) => 
-      new Date(b.access_date).getTime() - new Date(a.access_date).getTime()
-    );
-
-    let consecutive = 0;
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
-
-    for (let i = 0; i < sortedHistory.length; i++) {
-      const accessDate = new Date(sortedHistory[i].access_date);
-      accessDate.setHours(0, 0, 0, 0);
-      
-      const expectedDate = new Date(today);
-      expectedDate.setDate(today.getDate() - i);
-      expectedDate.setHours(0, 0, 0, 0);
-
-      if (accessDate.getTime() === expectedDate.getTime() && sortedHistory[i].accessed) {
-        consecutive++;
-      } else {
-        break;
-      }
-    }
-
-    return consecutive;
   };
 
   const toggleComplete = (id: string) => {
@@ -319,7 +373,19 @@ export default function HomePage() {
     setExpandedCard(expandedCard === id ? null : id);
   };
 
+  /**
+   * CORRIGIDO: Verifica acesso premium antes de navegar para CARDS
+   * Cards são conteúdo PREMIUM - requerem assinatura ou trial
+   */
   const handleCardClick = (content: DailyContent) => {
+    // Verificar se tem acesso premium
+    if (!hasAccess) {
+      console.log('[HOME] Acesso premium negado (card) - redirecionando para planos');
+      router.push('/plans');
+      return;
+    }
+
+    // Tem acesso - navegar normalmente
     if (content.type === 'gratitude') {
       window.location.href = '/gratitude';
     } else if (content.type === 'lectionary') {
@@ -333,8 +399,17 @@ export default function HomePage() {
     }
   };
 
-  const handleBibleClick = () => {
-    window.location.href = '/bible';
+  /**
+   * Verifica acesso premium antes de navegar para botões de acesso rápido
+   * Se não tem acesso, redireciona para /plans
+   */
+  const handlePremiumClick = (route: string) => {
+    if (!hasAccess) {
+      console.log('[HOME] Acesso premium negado - redirecionando para planos');
+      router.push('/plans');
+    } else {
+      router.push(route);
+    }
   };
 
   const openSidebarWithTab = (tab: 'account' | 'contribute' | 'frequency' | 'store') => {
@@ -342,24 +417,7 @@ export default function HomePage() {
     setSidebarOpen(true);
   };
 
-  const getDayStyle = (index: number) => {
-    const today = new Date().getDay();
-    const isToday = index === today;
-    const isAccessed = weeklyAccess[index];
-    
-    if (isToday) {
-      // Dia atual - laranja
-      return 'bg-gradient-to-br from-orange-400 to-orange-500 text-white shadow-lg scale-110';
-    } else if (isAccessed) {
-      // Dia acessado - amarelo claro
-      return 'bg-gradient-to-br from-yellow-200 to-yellow-300 text-gray-800';
-    } else {
-      // Dia não acessado - cinza escuro
-      return 'bg-gray-700 text-gray-400';
-    }
-  };
-
-  if (loading) {
+  if (loading || subscriptionLoading) {
     return (
       <div className="min-h-screen bg-gradient-to-b from-amber-50 to-white flex items-center justify-center">
         <div className="text-center">
@@ -387,14 +445,14 @@ export default function HomePage() {
               <img src="https://k6hrqrxuu8obbfwn.public.blob.vercel-storage.com/temp/8f5542a7-c136-497a-822e-8e2a2fb72e5e.png" alt="Plano Diário" className="h-16 w-auto" />
             </div>
 
-            {/* Card de Sequência Atual */}
+            {/* Card de Sequência Atual - Sincronizado com WeekActivityStreak via hook compartilhado */}
             <button 
               onClick={() => openSidebarWithTab('frequency')}
               className="bg-gradient-to-br from-blue-400 to-blue-600 rounded-xl p-3 text-white shadow-lg hover:shadow-xl transition-all hover:scale-105"
             >
               <div className="flex items-center gap-2">
                 <Star className="w-5 h-5 animate-pulse" />
-                <p className="text-lg font-bold leading-none">{consecutiveDays}</p>
+                <p className="text-lg font-bold leading-none lasy-highlight">{streak}</p>
               </div>
             </button>
           </div>
@@ -402,29 +460,28 @@ export default function HomePage() {
       </header>
 
       <div className="container mx-auto px-4 py-6">
-        {/* Weekly Calendar */}
-        <div className="bg-white rounded-2xl shadow-md p-6 mb-6">
-          <div className="flex justify-between items-center mb-4">
-            <h2 className="text-lg font-semibold text-gray-800">Sua Semana</h2>
+        {/* Trial Banner - Mostrar apenas se estiver no trial */}
+        {isInTrial && (
+          <div className="mb-6 bg-gradient-to-r from-amber-400 to-amber-600 rounded-2xl p-4 text-white shadow-lg">
+            <div className="flex items-center gap-3">
+              <div className="bg-white/20 p-2 rounded-full">
+                <Star className="w-6 h-6" />
+              </div>
+              <div className="flex-1">
+                <p className="font-bold">Período de Teste Ativo</p>
+                <p className="text-sm text-white/90">Você tem acesso completo por 3 dias!</p>
+              </div>
+            </div>
           </div>
-          
-          <div className="flex justify-between gap-2">
-            {weekDays.map((day, index) => (
-              <button
-                key={index}
-                onClick={() => setSelectedDay(index)}
-                className={`flex-1 aspect-square rounded-full flex items-center justify-center font-semibold transition-all ${getDayStyle(index)}`}
-              >
-                {day}
-              </button>
-            ))}
-          </div>
-        </div>
+        )}
 
-        {/* Quick Access Buttons */}
-        <div className="grid grid-cols-4 gap-3 mb-6">
+        {/* Weekly Calendar - Componente com dados do Supabase */}
+        <WeekActivityStreak />
+
+        {/* Quick Access Buttons - TODOS OS BOTÕES SÃO PREMIUM EXCETO SIDEBAR */}
+        <div className="grid grid-cols-4 gap-3 mb-6 mt-8">
           <button 
-            onClick={handleBibleClick}
+            onClick={() => handlePremiumClick('/bible')}
             className="flex flex-col items-center gap-2 p-4 bg-white rounded-2xl shadow-md hover:shadow-lg transition-all"
           >
             <div className="w-12 h-12 bg-gradient-to-br from-amber-400 to-amber-600 rounded-full flex items-center justify-center">
@@ -464,7 +521,7 @@ export default function HomePage() {
           </button>
         </div>
 
-        {/* Content Cards */}
+        {/* Content Cards - TODOS OS CARDS SÃO PREMIUM */}
         <div className="space-y-4">
           {contents.map((content) => (
             <div
@@ -546,6 +603,9 @@ export default function HomePage() {
           ))}
         </div>
       </div>
+
+      {/* Botão Flutuante de Oração */}
+      <PrayerFloatingButton />
 
       {/* Sidebar */}
       <Sidebar 

@@ -1,13 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 
-// Verificar se as variáveis de ambiente estão configuradas
-const hasSupabaseConfig = 
-  process.env.NEXT_PUBLIC_SUPABASE_URL && 
-  process.env.SUPABASE_SERVICE_ROLE_KEY;
-
-// Criar client do servidor apenas se as variáveis estiverem configuradas
-const supabaseAdmin = hasSupabaseConfig ? createClient(
+// Criar client do servidor com service role para API routes
+const supabaseAdmin = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
   process.env.SUPABASE_SERVICE_ROLE_KEY!,
   {
@@ -16,7 +11,7 @@ const supabaseAdmin = hasSupabaseConfig ? createClient(
       autoRefreshToken: false,
     }
   }
-) : null;
+);
 
 // GET - Buscar dados do usuário
 export async function GET(request: NextRequest) {
@@ -28,19 +23,6 @@ export async function GET(request: NextRequest) {
       return NextResponse.json({ error: 'userId é obrigatório' }, { status: 400 });
     }
 
-    // Se Supabase não estiver configurado, retornar dados padrão
-    if (!supabaseAdmin) {
-      return NextResponse.json({
-        userData: {
-          user_id: userId,
-          consecutive_days: 0,
-          last_access_date: new Date().toISOString(),
-          onboarding_completed: false
-        },
-        accessHistory: []
-      });
-    }
-
     // Buscar dados do usuário
     const { data: userData, error: userDataError } = await supabaseAdmin
       .from('user_data')
@@ -49,17 +31,7 @@ export async function GET(request: NextRequest) {
       .single();
 
     if (userDataError && userDataError.code !== 'PGRST116') {
-      console.error('Erro ao buscar user_data:', userDataError);
-      // Retornar dados padrão em caso de erro
-      return NextResponse.json({
-        userData: {
-          user_id: userId,
-          consecutive_days: 0,
-          last_access_date: new Date().toISOString(),
-          onboarding_completed: false
-        },
-        accessHistory: []
-      });
+      throw userDataError;
     }
 
     // Buscar histórico de acesso
@@ -70,30 +42,16 @@ export async function GET(request: NextRequest) {
       .order('access_date', { ascending: true });
 
     if (historyError) {
-      console.error('Erro ao buscar access_history:', historyError);
+      throw historyError;
     }
 
     return NextResponse.json({
-      userData: userData || {
-        user_id: userId,
-        consecutive_days: 0,
-        last_access_date: new Date().toISOString(),
-        onboarding_completed: false
-      },
+      userData: userData || null,
       accessHistory: accessHistory || []
     });
   } catch (error: any) {
     console.error('Erro ao buscar dados do usuário:', error);
-    // Retornar dados padrão em caso de erro
-    return NextResponse.json({
-      userData: {
-        user_id: request.nextUrl.searchParams.get('userId'),
-        consecutive_days: 0,
-        last_access_date: new Date().toISOString(),
-        onboarding_completed: false
-      },
-      accessHistory: []
-    });
+    return NextResponse.json({ error: error.message }, { status: 500 });
   }
 }
 
@@ -101,20 +59,10 @@ export async function GET(request: NextRequest) {
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
-    const { userId, consecutiveDays, lastAccessDate, onboardingCompleted } = body;
+    const { userId, consecutiveDays, lastAccessDate, onboardingCompleted, trialStartedAt } = body;
 
     if (!userId) {
       return NextResponse.json({ error: 'userId é obrigatório' }, { status: 400 });
-    }
-
-    // Se Supabase não estiver configurado, retornar dados mock
-    if (!supabaseAdmin) {
-      return NextResponse.json({
-        user_id: userId,
-        consecutive_days: consecutiveDays || 0,
-        last_access_date: lastAccessDate || new Date().toISOString(),
-        onboarding_completed: onboardingCompleted || false
-      });
     }
 
     // Verificar se já existe dados do usuário
@@ -127,53 +75,54 @@ export async function POST(request: NextRequest) {
     let result;
     if (existingData) {
       // Atualizar dados existentes
+      const updateData: any = {
+        consecutive_days: consecutiveDays,
+        last_access_date: lastAccessDate,
+        onboarding_completed: onboardingCompleted,
+        updated_at: new Date().toISOString()
+      };
+
+      // Adicionar trial_started_at apenas se fornecido
+      if (trialStartedAt !== undefined) {
+        updateData.trial_started_at = trialStartedAt;
+      }
+
       const { data, error } = await supabaseAdmin
         .from('user_data')
-        .update({
-          consecutive_days: consecutiveDays,
-          last_access_date: lastAccessDate,
-          onboarding_completed: onboardingCompleted,
-          updated_at: new Date().toISOString()
-        })
+        .update(updateData)
         .eq('user_id', userId)
         .select()
         .single();
 
-      if (error) {
-        console.error('Erro ao atualizar user_data:', error);
-        throw error;
-      }
+      if (error) throw error;
       result = data;
     } else {
       // Criar novos dados
+      const insertData: any = {
+        user_id: userId,
+        consecutive_days: consecutiveDays || 0,
+        last_access_date: lastAccessDate,
+        onboarding_completed: onboardingCompleted || false
+      };
+
+      // Adicionar trial_started_at apenas se fornecido
+      if (trialStartedAt !== undefined) {
+        insertData.trial_started_at = trialStartedAt;
+      }
+
       const { data, error } = await supabaseAdmin
         .from('user_data')
-        .insert({
-          user_id: userId,
-          consecutive_days: consecutiveDays || 0,
-          last_access_date: lastAccessDate,
-          onboarding_completed: onboardingCompleted || false
-        })
+        .insert(insertData)
         .select()
         .single();
 
-      if (error) {
-        console.error('Erro ao criar user_data:', error);
-        throw error;
-      }
+      if (error) throw error;
       result = data;
     }
 
     return NextResponse.json(result);
   } catch (error: any) {
     console.error('Erro ao salvar dados do usuário:', error);
-    // Retornar dados mock em caso de erro
-    const body = await request.json();
-    return NextResponse.json({
-      user_id: body.userId,
-      consecutive_days: body.consecutiveDays || 0,
-      last_access_date: body.lastAccessDate || new Date().toISOString(),
-      onboarding_completed: body.onboardingCompleted || false
-    });
+    return NextResponse.json({ error: error.message }, { status: 500 });
   }
 }

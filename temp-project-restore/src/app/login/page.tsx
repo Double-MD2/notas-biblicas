@@ -1,17 +1,90 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState } from 'react';
 import { supabase } from '@/lib/supabase';
+import { checkSupabaseReady } from '@/lib/supabase-guard';
 import { useRouter } from 'next/navigation';
+import { useDailyLogin } from '@/hooks/useDailyLogin';
 
 export default function LoginPage() {
   const router = useRouter();
+  const { logDailyLogin } = useDailyLogin();
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [view, setView] = useState<'sign_in' | 'sign_up' | 'forgot_password'>('sign_in');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [submitting, setSubmitting] = useState(false);
+
+  const handleLoginCallback = async (userId: string, token: string) => {
+    try {
+      console.log('[LOGIN] 📞 Chamando login-callback...');
+      
+      // Chamar endpoint de login-callback para incrementar loginCount
+      const response = await fetch('/api/auth/login-callback', {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${token}`,
+        },
+      });
+
+      if (response.ok) {
+        const data = await response.json();
+        console.log('[LOGIN] ✅ Login-callback bem-sucedido:', {
+          loginCount: data.loginCount,
+          quizCompleted: data.quizCompleted,
+          redirectTo: data.redirectTo,
+        });
+
+        // Telemetria
+        if (typeof window !== 'undefined' && (window as any).gtag) {
+          (window as any).gtag('event', 'login_success', {
+            user_id: userId,
+            login_count: data.loginCount,
+            redirect_to: data.redirectTo,
+          });
+          
+          if (data.redirectTo === '/home') {
+            (window as any).gtag('event', 'home_entered', {
+              user_id: userId,
+            });
+          } else {
+            (window as any).gtag('event', 'onboarding_redirect', {
+              user_id: userId,
+            });
+          }
+        }
+
+        // Redirecionar conforme resposta
+        window.location.href = data.redirectTo;
+      } else {
+        console.warn('[LOGIN] ⚠️ Erro no login-callback, usando fallback');
+        
+        // Fallback: buscar perfil diretamente
+        const profileResponse = await fetch('/api/user-profile', {
+          headers: {
+            'Authorization': `Bearer ${token}`,
+          },
+        });
+
+        if (profileResponse.ok) {
+          const profileData = await profileResponse.json();
+          const redirectTo = profileData.quizCompleted ? '/home' : '/onboarding';
+          
+          console.log('[LOGIN] 🔀 Redirecionando para:', redirectTo);
+          window.location.href = redirectTo;
+        } else {
+          // Se tudo falhar, ir para onboarding
+          console.log('[LOGIN] ⚠️ Erro ao buscar perfil, indo para onboarding');
+          window.location.href = '/onboarding';
+        }
+      }
+    } catch (error) {
+      console.error('[LOGIN] ❌ Erro no login-callback:', error);
+      // Em caso de erro, redirecionar para onboarding por segurança
+      window.location.href = '/onboarding';
+    }
+  };
 
   const handleSignIn = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -48,15 +121,19 @@ export default function LoginPage() {
         console.log('[LOGIN] Aguardando 1s para sincronização de cookies...');
         await new Promise(resolve => setTimeout(resolve, 1000));
 
-        // Verificar se a sessão foi salva
-        const { data: { session: savedSession } } = await supabase.auth.getSession();
+        // Verificar se a sessão foi salva usando validação segura
+        const guard = await checkSupabaseReady();
 
-        if (savedSession) {
+        if (guard.isReady && guard.session) {
           console.log('[LOGIN] ✅ Sessão confirmada!');
-          console.log('[LOGIN] 🚀 Redirecionando para /home...');
-
-          // Usar window.location para garantir reload completo e middleware pegar os cookies
-          window.location.href = '/home';
+          
+          // Registrar login diário no Supabase (não bloqueia o fluxo)
+          logDailyLogin().catch(err => {
+            console.log('[LOGIN] ⚠️ Erro ao registrar login (não crítico):', err);
+          });
+          
+          // Chamar login-callback para incrementar loginCount e obter redirecionamento
+          await handleLoginCallback(guard.session.user.id, guard.session.access_token);
         } else {
           console.error('[LOGIN] ❌ Sessão NÃO foi persistida!');
           setError('Erro ao salvar sessão. Tente novamente.');
@@ -93,7 +170,23 @@ export default function LoginPage() {
 
       if (data.session) {
         // Cadastro e login automático
-        router.replace('/home');
+        console.log('[SIGNUP] ✅ Cadastro bem-sucedido!');
+        console.log('[SIGNUP] User ID:', data.session.user.id);
+        
+        // Registrar login diário no Supabase (não bloqueia o fluxo)
+        logDailyLogin().catch(err => {
+          console.log('[SIGNUP] ⚠️ Erro ao registrar login (não crítico):', err);
+        });
+        
+        // Telemetria
+        if (typeof window !== 'undefined' && (window as any).gtag) {
+          (window as any).gtag('event', 'sign_up', {
+            user_id: data.session.user.id,
+          });
+        }
+        
+        // Chamar login-callback (novo usuário sempre vai para onboarding)
+        await handleLoginCallback(data.session.user.id, data.session.access_token);
       } else {
         // Email de confirmação enviado
         setError('Verifique seu email para confirmar o cadastro.');

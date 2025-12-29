@@ -1,11 +1,13 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { supabase } from '@/lib/supabase';
+import { checkSupabaseReady } from '@/lib/supabase-guard';
 import { useRouter } from 'next/navigation';
+import { useDailyLogin } from '@/hooks/useDailyLogin';
 
 export default function Home() {
   const router = useRouter();
+  const { logDailyLogin } = useDailyLogin();
   const [isChecking, setIsChecking] = useState(true);
 
   useEffect(() => {
@@ -13,17 +15,28 @@ export default function Home() {
 
     const checkUser = async () => {
       try {
-        const { data: { session } } = await supabase.auth.getSession();
+        console.log('[HOME] 🔍 Verificando autenticação...');
+
+        // Usar validação segura do Supabase
+        const guard = await checkSupabaseReady();
 
         if (!isMounted) return;
 
-        if (session) {
+        if (guard.isReady && guard.session) {
+          console.log('[HOME] ✅ Usuário autenticado, redirecionando para /home');
+          
+          // Registrar login diário ao restaurar sessão (não bloqueia o fluxo)
+          logDailyLogin().catch(err => {
+            console.log('[HOME] ⚠️ Erro ao registrar login (não crítico):', err);
+          });
+          
           router.replace('/home');
         } else {
+          console.log('[HOME] ❌ Usuário não autenticado, redirecionando para /login');
           router.replace('/login');
         }
       } catch (error) {
-        console.error('Erro ao verificar sessão:', error);
+        console.error('[HOME] ❌ Erro ao verificar sessão:', error);
         if (isMounted) {
           router.replace('/login');
         }
@@ -39,7 +52,7 @@ export default function Home() {
     return () => {
       isMounted = false;
     };
-  }, [router]);
+  }, [router, logDailyLogin]);
 
   // Mostrar spinner ENQUANTO está checando
   if (isChecking) {

@@ -1,10 +1,13 @@
 'use client';
 
 import { useState, useEffect, useRef } from 'react';
-import { X, User, Camera, Heart, DollarSign, Calendar, Edit2, ShoppingCart, LogOut, Award, TrendingUp, Star } from 'lucide-react';
+import { X, User, Camera, Heart, DollarSign, Calendar, Edit2, ShoppingCart, LogOut, Award, TrendingUp, Star, Clock, ChevronRight, LifeBuoy, MessageCircle, Mail, XCircle } from 'lucide-react';
 import { UserProfile } from '@/lib/types';
 import { supabase } from '@/lib/supabase';
 import { useRouter } from 'next/navigation';
+import { useSidebar } from '@/contexts/SidebarContext';
+import { useSubscription } from '@/hooks/useSubscription';
+import Frequency30Days from './Frequency30Days';
 
 interface SidebarProps {
   isOpen: boolean;
@@ -12,29 +15,34 @@ interface SidebarProps {
   initialTab?: 'account' | 'contribute' | 'frequency' | 'store';
 }
 
-interface AccessRecord {
-  date: string;
-  accessed: boolean;
+interface ActivityDay {
+  activity_date: string;
 }
 
 export default function Sidebar({ isOpen, onClose, initialTab = 'account' }: SidebarProps) {
   const router = useRouter();
+  const { setIsSidebarOpen } = useSidebar();
+  const { isInTrial, trialDaysRemaining, isActive: hasActiveSubscription } = useSubscription();
   const [activeTab, setActiveTab] = useState<'account' | 'contribute' | 'frequency' | 'store'>(initialTab);
   const [profile, setProfile] = useState<Partial<UserProfile>>({});
   const [isEditing, setIsEditing] = useState(false);
   const [editedProfile, setEditedProfile] = useState<Partial<UserProfile>>({});
   const [consecutiveDays, setConsecutiveDays] = useState(0);
-  const [accessHistory, setAccessHistory] = useState<AccessRecord[]>([]);
+  const [activities, setActivities] = useState<ActivityDay[]>([]);
+  const [userId, setUserId] = useState<string | null>(null);
+  const [loginCount, setLoginCount] = useState(0);
+  const [lastLoginAt, setLastLoginAt] = useState<string | null>(null);
+  const [showSupportModal, setShowSupportModal] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
-    const saved = localStorage.getItem('userProfile');
-    if (saved) {
-      const parsed = JSON.parse(saved);
-      setProfile(parsed);
-      setEditedProfile(parsed);
+    if (isOpen) {
+      loadUserProfile();
+      loadActivities();
     }
-  }, [isOpen]);
+    // Atualizar o contexto quando a sidebar abrir/fechar
+    setIsSidebarOpen(isOpen);
+  }, [isOpen, setIsSidebarOpen]);
 
   useEffect(() => {
     if (isOpen && initialTab) {
@@ -42,32 +50,148 @@ export default function Sidebar({ isOpen, onClose, initialTab = 'account' }: Sid
     }
   }, [isOpen, initialTab]);
 
-  useEffect(() => {
-    // Registrar acesso do dia atual
-    const today = new Date().toDateString();
-    const lastAccess = localStorage.getItem('lastAccessDate');
-    
-    if (lastAccess !== today) {
-      localStorage.setItem('lastAccessDate', today);
-      
-      // Atualizar histórico de acessos
-      const history = getAccessHistory();
-      const updatedHistory = [...history];
-      const todayIndex = updatedHistory.findIndex(
-        (record) => new Date(record.date).toDateString() === today
-      );
-      
-      if (todayIndex !== -1) {
-        updatedHistory[todayIndex].accessed = true;
-        localStorage.setItem('accessHistory', JSON.stringify(updatedHistory));
+  const loadActivities = async () => {
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+
+      if (!session) {
+        console.log('[SIDEBAR] Sem sessão, não carregando atividades');
+        return;
+      }
+
+      // Buscar últimos 30 dias de atividade do banco de dados
+      const { data, error } = await supabase
+        .from('user_week_activity')
+        .select('activity_date')
+        .eq('user_id', session.user.id)
+        .order('activity_date', { ascending: false })
+        .limit(30);
+
+      if (error) {
+        console.error('[SIDEBAR] Erro ao carregar atividades:', error);
+        return;
+      }
+
+      setActivities(data || []);
+
+      // Calcular streak (dias consecutivos)
+      const streak = calculateStreak(data || []);
+      setConsecutiveDays(streak);
+
+      console.log('[SIDEBAR] ✅ Atividades carregadas:', {
+        total: data?.length || 0,
+        streak,
+      });
+    } catch (err) {
+      console.error('[SIDEBAR] Exceção ao carregar atividades:', err);
+    }
+  };
+
+  const calculateStreak = (activities: ActivityDay[]): number => {
+    if (activities.length === 0) return 0;
+
+    // Ordenar por data decrescente (mais recente primeiro)
+    const sortedActivities = [...activities].sort(
+      (a, b) => new Date(b.activity_date).getTime() - new Date(a.activity_date).getTime()
+    );
+
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+
+    // Encontrar o dia mais recente com atividade
+    const mostRecentActivity = new Date(sortedActivities[0].activity_date);
+    mostRecentActivity.setHours(0, 0, 0, 0);
+
+    let streak = 0;
+    let currentDate = new Date(mostRecentActivity);
+
+    // Contar dias consecutivos a partir do dia mais recente com atividade
+    for (const activity of sortedActivities) {
+      const activityDate = new Date(activity.activity_date);
+      activityDate.setHours(0, 0, 0, 0);
+
+      if (activityDate.getTime() === currentDate.getTime()) {
+        streak++;
+        currentDate.setDate(currentDate.getDate() - 1);
+      } else if (activityDate.getTime() < currentDate.getTime()) {
+        // Se há um gap, a sequência termina
+        break;
       }
     }
-    
-    // Calcular dias consecutivos
-    const consecutive = calculateConsecutiveDays();
-    setConsecutiveDays(consecutive);
-    setAccessHistory(getAccessHistory());
-  }, [isOpen]);
+
+    return streak;
+  };
+
+  const loadUserProfile = async () => {
+    try {
+      // Buscar usuário logado
+      const { data: { session } } = await supabase.auth.getSession();
+      
+      if (!session) {
+        console.log('[SIDEBAR] Nenhuma sessão encontrada');
+        return;
+      }
+
+      const currentUserId = session.user.id;
+      const token = session.access_token;
+      setUserId(currentUserId);
+
+      // SEMPRE buscar perfil do backend (fonte de verdade)
+      const response = await fetch(`/api/user-profile`, {
+        headers: {
+          'Authorization': `Bearer ${token}`,
+        },
+      });
+      
+      if (response.ok) {
+        const data = await response.json();
+        
+        const backendProfile = {
+          name: data.name || null,
+          religion: data.religion || null,
+          profilePhoto: data.photoUrl || null,
+          favoriteVerse: null, // Não está no backend ainda
+        };
+
+        setProfile(backendProfile);
+        setEditedProfile(backendProfile);
+        setLoginCount(data.loginCount || 0);
+        setLastLoginAt(data.lastLoginAt || null);
+
+        // Atualizar localStorage com dados do backend (backend prevalece)
+        localStorage.setItem('userProfile', JSON.stringify(backendProfile));
+        
+        console.log('[SIDEBAR] ✅ Perfil carregado do backend:', {
+          name: backendProfile.name,
+          religion: backendProfile.religion,
+          loginCount: data.loginCount,
+          lastLoginAt: data.lastLoginAt,
+        });
+      } else {
+        console.warn('[SIDEBAR] ⚠️ Erro ao buscar perfil do backend');
+        
+        // Fallback para localStorage apenas se API falhar
+        const saved = localStorage.getItem('userProfile');
+        if (saved) {
+          const parsed = JSON.parse(saved);
+          setProfile(parsed);
+          setEditedProfile(parsed);
+          console.log('[SIDEBAR] ⚠️ Usando perfil do localStorage (fallback)');
+        }
+      }
+    } catch (error) {
+      console.error('[SIDEBAR] Erro ao carregar perfil:', error);
+      
+      // Fallback para localStorage
+      const saved = localStorage.getItem('userProfile');
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        setProfile(parsed);
+        setEditedProfile(parsed);
+        console.log('[SIDEBAR] ⚠️ Usando perfil do localStorage (fallback após erro)');
+      }
+    }
+  };
 
   const handlePhotoUpload = (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
@@ -101,10 +225,54 @@ export default function Sidebar({ isOpen, onClose, initialTab = 'account' }: Sid
     fileInputRef.current?.click();
   };
 
-  const handleSaveProfile = () => {
-    localStorage.setItem('userProfile', JSON.stringify(editedProfile));
-    setProfile(editedProfile);
-    setIsEditing(false);
+  const handleSaveProfile = async () => {
+    try {
+      // Salvar no backend
+      if (userId) {
+        const { data: { session } } = await supabase.auth.getSession();
+        if (!session) {
+          console.error('[SIDEBAR] Sessão não encontrada');
+          return;
+        }
+
+        const token = session.access_token;
+
+        const response = await fetch('/api/user-profile', {
+          method: 'POST',
+          headers: { 
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${token}`,
+          },
+          body: JSON.stringify({
+            name: editedProfile.name || null,
+            religion: editedProfile.religion || null,
+            photoUrl: editedProfile.profilePhoto || null,
+          }),
+        });
+
+        if (response.ok) {
+          console.log('[SIDEBAR] ✅ Perfil salvo no backend');
+          
+          // Atualizar estado local com dados salvos
+          setProfile(editedProfile);
+          localStorage.setItem('userProfile', JSON.stringify(editedProfile));
+          setIsEditing(false);
+        } else {
+          console.warn('[SIDEBAR] ⚠️ Erro ao salvar no backend, salvando apenas localmente');
+          
+          // Salvar no localStorage (fallback)
+          localStorage.setItem('userProfile', JSON.stringify(editedProfile));
+          setProfile(editedProfile);
+          setIsEditing(false);
+        }
+      }
+    } catch (error) {
+      console.error('[SIDEBAR] Erro ao salvar perfil:', error);
+      // Mesmo com erro, salvar localmente
+      localStorage.setItem('userProfile', JSON.stringify(editedProfile));
+      setProfile(editedProfile);
+      setIsEditing(false);
+    }
   };
 
   const handleLogout = async () => {
@@ -127,43 +295,25 @@ export default function Sidebar({ isOpen, onClose, initialTab = 'account' }: Sid
     }
   };
 
-  const getAccessHistory = (): AccessRecord[] => {
-    const saved = localStorage.getItem('accessHistory');
-    if (saved) {
-      return JSON.parse(saved);
-    }
-    
-    // Criar histórico inicial dos últimos 30 dias
-    const history: AccessRecord[] = [];
+  const getLast30Days = (): { date: Date; hasActivity: boolean }[] => {
     const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    
+    const days: { date: Date; hasActivity: boolean }[] = [];
     
     for (let i = 29; i >= 0; i--) {
       const date = new Date(today);
-      date.setDate(date.getDate() - i);
-      history.push({
-        date: date.toISOString(),
-        accessed: i === 0, // Apenas hoje está acessado inicialmente
-      });
+      date.setDate(today.getDate() - i);
+      const dateString = date.toISOString().split('T')[0];
+      
+      const hasActivity = activities.some(
+        (activity) => activity.activity_date === dateString
+      );
+      
+      days.push({ date, hasActivity });
     }
     
-    localStorage.setItem('accessHistory', JSON.stringify(history));
-    return history;
-  };
-
-  const calculateConsecutiveDays = (): number => {
-    const history = getAccessHistory();
-    let consecutive = 0;
-    
-    // Contar de trás para frente (do mais recente para o mais antigo)
-    for (let i = history.length - 1; i >= 0; i--) {
-      if (history[i].accessed) {
-        consecutive++;
-      } else {
-        break;
-      }
-    }
-    
-    return consecutive;
+    return days;
   };
 
   const getLevelInfo = (days: number) => {
@@ -184,9 +334,41 @@ export default function Sidebar({ isOpen, onClose, initialTab = 'account' }: Sid
     return { name: 'Discípulo', daysNeeded: 6 - days };
   };
 
-  const totalAccessedDays = accessHistory.filter(record => record.accessed).length;
+  const totalAccessedDays = activities.length;
   const currentLevel = getLevelInfo(consecutiveDays);
   const nextLevel = getNextLevel(consecutiveDays);
+  const last30Days = getLast30Days();
+
+  // Calcular maior sequência histórica
+  const calculateMaxStreak = (): number => {
+    if (activities.length === 0) return 0;
+
+    const sortedActivities = [...activities].sort(
+      (a, b) => new Date(a.activity_date).getTime() - new Date(b.activity_date).getTime()
+    );
+
+    let maxStreak = 1;
+    let currentStreak = 1;
+
+    for (let i = 1; i < sortedActivities.length; i++) {
+      const prevDate = new Date(sortedActivities[i - 1].activity_date);
+      const currDate = new Date(sortedActivities[i].activity_date);
+      
+      const diffTime = currDate.getTime() - prevDate.getTime();
+      const diffDays = diffTime / (1000 * 60 * 60 * 24);
+
+      if (diffDays === 1) {
+        currentStreak++;
+        maxStreak = Math.max(maxStreak, currentStreak);
+      } else {
+        currentStreak = 1;
+      }
+    }
+
+    return maxStreak;
+  };
+
+  const maxStreak = calculateMaxStreak();
 
   if (!isOpen) return null;
 
@@ -224,6 +406,9 @@ export default function Sidebar({ isOpen, onClose, initialTab = 'account' }: Sid
             <div>
               <p className="font-semibold text-lg">{profile.name || 'Usuário'}</p>
               <p className="text-sm text-white/80">{profile.religion || 'Religião'}</p>
+              {loginCount > 0 && (
+                <p className="text-xs text-white/70 mt-1">{loginCount} {loginCount === 1 ? 'acesso' : 'acessos'}</p>
+              )}
             </div>
           </div>
         </div>
@@ -277,6 +462,25 @@ export default function Sidebar({ isOpen, onClose, initialTab = 'account' }: Sid
           {/* Account Tab */}
           {activeTab === 'account' && (
             <div className="space-y-6">
+              {/* Contador de Trial - Mostrar APENAS se estiver no trial E não tiver assinatura ativa */}
+              {isInTrial && !hasActiveSubscription && (
+                <div className="bg-gradient-to-r from-amber-50 to-orange-50 border-2 border-amber-200 rounded-xl p-4">
+                  <div className="flex items-center gap-3">
+                    <div className="bg-amber-400 p-2 rounded-full">
+                      <Clock className="w-5 h-5 text-white" />
+                    </div>
+                    <div className="flex-1">
+                      <p className="text-sm font-semibold text-gray-800">Teste Gratuito</p>
+                      <p className="text-xs text-gray-600">
+                        {trialDaysRemaining === 1 
+                          ? '1 dia restante' 
+                          : `${trialDaysRemaining} dias restantes`}
+                      </p>
+                    </div>
+                  </div>
+                </div>
+              )}
+
               <div className="text-center">
                 <div className="relative inline-block mb-4">
                   <div className="w-24 h-24 bg-gray-200 rounded-full flex items-center justify-center mx-auto overflow-hidden">
@@ -310,28 +514,80 @@ export default function Sidebar({ isOpen, onClose, initialTab = 'account' }: Sid
                   </div>
 
                   <div>
-                    <label className="text-sm font-semibold text-gray-700">Versículo Favorito</label>
-                    <p className="mt-1 text-gray-900 italic">
-                      {profile.favoriteVerse || 'Nenhum versículo favorito ainda'}
-                    </p>
+                    <label className="text-sm font-semibold text-gray-700">Religião</label>
+                    <p className="mt-1 text-gray-900">{profile.religion || 'Não informada'}</p>
                   </div>
 
-                  <button
-                    onClick={() => setIsEditing(true)}
-                    className="w-full flex items-center justify-center gap-2 px-4 py-3 bg-amber-400 text-white rounded-xl font-semibold hover:bg-amber-500 transition-colors"
-                  >
-                    <Edit2 className="w-5 h-5" />
-                    Editar Perfil
-                  </button>
+                  {/* Lista de opções moderna - estilo YouTube/Mercado Livre */}
+                  <div className="space-y-2 mt-6">
+                    {/* Editar Perfil */}
+                    <button
+                      onClick={() => setIsEditing(true)}
+                      className="w-full flex items-center justify-between px-4 py-3 bg-white hover:bg-gray-50 rounded-lg transition-colors border border-gray-200"
+                    >
+                      <div className="flex items-center gap-3">
+                        <Edit2 className="w-5 h-5 text-gray-600" />
+                        <span className="text-sm font-medium text-gray-800">Editar Perfil</span>
+                      </div>
+                      <ChevronRight className="w-5 h-5 text-gray-400" />
+                    </button>
 
-                  {/* Botão de Sair */}
-                  <button
-                    onClick={handleLogout}
-                    className="w-full flex items-center justify-center gap-2 px-4 py-3 bg-red-500 text-white rounded-xl font-semibold hover:bg-red-600 transition-colors"
-                  >
-                    <LogOut className="w-5 h-5" />
-                    Sair
-                  </button>
+                    {/* Ver Planos Premium */}
+                    <button
+                      onClick={() => {
+                        router.push('/plans');
+                        onClose();
+                      }}
+                      className="w-full flex items-center justify-between px-4 py-3 bg-white hover:bg-gray-50 rounded-lg transition-colors border border-gray-200"
+                    >
+                      <div className="flex items-center gap-3">
+                        <Star className="w-5 h-5 text-amber-500" />
+                        <span className="text-sm font-medium text-gray-800">Ver Planos Premium</span>
+                      </div>
+                      <ChevronRight className="w-5 h-5 text-gray-400" />
+                    </button>
+
+                    {/* Suporte */}
+                    <button
+                      onClick={() => setShowSupportModal(true)}
+                      className="w-full flex items-center justify-between px-4 py-3 bg-white hover:bg-gray-50 rounded-lg transition-colors border border-gray-200"
+                    >
+                      <div className="flex items-center gap-3">
+                        <LifeBuoy className="w-5 h-5 text-blue-500" />
+                        <span className="text-sm font-medium text-gray-800">Suporte</span>
+                      </div>
+                      <ChevronRight className="w-5 h-5 text-gray-400" />
+                    </button>
+                  </div>
+
+                  {/* Zona de perigo - Sair e Cancelar Assinatura */}
+                  <div className="mt-8 pt-6 border-t border-gray-200 space-y-2">
+                    <button
+                      onClick={handleLogout}
+                      className="w-full flex items-center justify-between px-4 py-3 bg-white hover:bg-red-50 rounded-lg transition-colors border border-gray-200"
+                    >
+                      <div className="flex items-center gap-3">
+                        <LogOut className="w-5 h-5 text-red-500" />
+                        <span className="text-sm font-medium text-red-500">Sair</span>
+                      </div>
+                      <ChevronRight className="w-5 h-5 text-red-400" />
+                    </button>
+
+                    {/* Cancelar Assinatura */}
+                    <button
+                      onClick={() => {
+                        router.push('/cancel-subscription');
+                        onClose();
+                      }}
+                      className="w-full flex items-center justify-between px-4 py-3 bg-white hover:bg-orange-50 rounded-lg transition-colors border border-gray-200"
+                    >
+                      <div className="flex items-center gap-3">
+                        <XCircle className="w-5 h-5 text-orange-500" />
+                        <span className="text-sm font-medium text-orange-500">Cancelar assinatura</span>
+                      </div>
+                      <ChevronRight className="w-5 h-5 text-orange-400" />
+                    </button>
+                  </div>
                 </>
               ) : (
                 <>
@@ -346,13 +602,12 @@ export default function Sidebar({ isOpen, onClose, initialTab = 'account' }: Sid
                   </div>
 
                   <div>
-                    <label className="text-sm font-semibold text-gray-700">Versículo Favorito</label>
-                    <textarea
-                      value={editedProfile.favoriteVerse || ''}
-                      onChange={(e) => setEditedProfile({ ...editedProfile, favoriteVerse: e.target.value })}
-                      rows={3}
-                      className="mt-1 w-full px-4 py-2 border-2 border-gray-200 rounded-lg focus:border-amber-400 focus:outline-none resize-none"
-                      placeholder="Ex: João 3:16"
+                    <label className="text-sm font-semibold text-gray-700">Religião</label>
+                    <input
+                      type="text"
+                      value={editedProfile.religion || ''}
+                      onChange={(e) => setEditedProfile({ ...editedProfile, religion: e.target.value })}
+                      className="mt-1 w-full px-4 py-2 border-2 border-gray-200 rounded-lg focus:border-amber-400 focus:outline-none"
                     />
                   </div>
 
@@ -475,55 +730,13 @@ export default function Sidebar({ isOpen, onClose, initialTab = 'account' }: Sid
                 
                 <div className="bg-purple-50 rounded-xl p-4 text-center border-2 border-purple-100">
                   <Award className="w-6 h-6 text-purple-600 mx-auto mb-2" />
-                  <p className="text-2xl font-bold text-purple-600">{Math.max(...accessHistory.map((_, i) => {
-                    let count = 0;
-                    for (let j = i; j < accessHistory.length && accessHistory[j].accessed; j++) {
-                      count++;
-                    }
-                    return count;
-                  }))}</p>
+                  <p className="text-2xl font-bold text-purple-600">{maxStreak}</p>
                   <p className="text-xs text-gray-600">Maior Sequência</p>
                 </div>
               </div>
 
-              {/* Calendário de Frequência */}
-              <div>
-                <p className="text-sm font-semibold text-gray-700 mb-3 flex items-center gap-2">
-                  <Calendar className="w-4 h-4" />
-                  Últimos 30 dias
-                </p>
-                <div className="grid grid-cols-7 gap-2">
-                  {accessHistory.map((day, index) => {
-                    const date = new Date(day.date);
-                    const dayOfMonth = date.getDate();
-                    const isToday = date.toDateString() === new Date().toDateString();
-                    
-                    return (
-                      <div key={index} className="text-center">
-                        <div
-                          className={`w-full aspect-square rounded-lg mb-1 transition-all duration-300 flex items-center justify-center text-xs font-semibold ${
-                            day.accessed
-                              ? 'bg-gradient-to-br from-amber-400 to-amber-500 text-white shadow-md transform hover:scale-110'
-                              : 'bg-gray-100 text-gray-400 hover:bg-gray-200'
-                          } ${isToday ? 'ring-2 ring-amber-600 ring-offset-2' : ''}`}
-                        >
-                          {dayOfMonth}
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>
-                <div className="flex items-center justify-center gap-4 mt-3 text-xs text-gray-600">
-                  <div className="flex items-center gap-1">
-                    <div className="w-3 h-3 bg-gradient-to-br from-amber-400 to-amber-500 rounded" />
-                    <span>Acessado</span>
-                  </div>
-                  <div className="flex items-center gap-1">
-                    <div className="w-3 h-3 bg-gray-100 rounded" />
-                    <span>Não acessado</span>
-                  </div>
-                </div>
-              </div>
+              {/* Componente de Frequência (30 dias) */}
+              <Frequency30Days />
 
               {/* Badges de Conquistas */}
               <div className="bg-gradient-to-br from-purple-50 to-pink-50 rounded-xl p-4 border-2 border-purple-100">
@@ -664,6 +877,64 @@ export default function Sidebar({ isOpen, onClose, initialTab = 'account' }: Sid
           )}
         </div>
       </div>
+
+      {/* Modal de Suporte */}
+      {showSupportModal && (
+        <>
+          <div
+            className="fixed inset-0 bg-black/60 z-[60] transition-opacity"
+            onClick={() => setShowSupportModal(false)}
+          />
+          <div className="fixed top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-80 bg-white rounded-2xl shadow-2xl z-[70] p-6">
+            <div className="text-center mb-6">
+              <div className="w-16 h-16 bg-blue-100 rounded-full flex items-center justify-center mx-auto mb-3">
+                <LifeBuoy className="w-8 h-8 text-blue-600" />
+              </div>
+              <h3 className="text-xl font-bold text-gray-800 mb-2">Fale com o Suporte</h3>
+              <p className="text-sm text-gray-600">
+                Escolha como prefere entrar em contato
+              </p>
+            </div>
+
+            <div className="space-y-3">
+              {/* WhatsApp */}
+              <a
+                href="http://wa.me/5564992016685"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="w-full flex items-center gap-3 px-4 py-3 bg-green-50 hover:bg-green-100 rounded-lg transition-colors border-2 border-green-200"
+              >
+                <MessageCircle className="w-6 h-6 text-green-600" />
+                <div className="flex-1 text-left">
+                  <p className="text-sm font-semibold text-gray-800">Por WhatsApp</p>
+                  <p className="text-xs text-gray-600">Resposta rápida</p>
+                </div>
+                <ChevronRight className="w-5 h-5 text-gray-400" />
+              </a>
+
+              {/* E-mail */}
+              <a
+                href="mailto:md2.double@gmail.com"
+                className="w-full flex items-center gap-3 px-4 py-3 bg-blue-50 hover:bg-blue-100 rounded-lg transition-colors border-2 border-blue-200"
+              >
+                <Mail className="w-6 h-6 text-blue-600" />
+                <div className="flex-1 text-left">
+                  <p className="text-sm font-semibold text-gray-800">Via E-mail</p>
+                  <p className="text-xs text-gray-600">md2.double@gmail.com</p>
+                </div>
+                <ChevronRight className="w-5 h-5 text-gray-400" />
+              </a>
+            </div>
+
+            <button
+              onClick={() => setShowSupportModal(false)}
+              className="w-full mt-4 px-4 py-3 bg-gray-100 hover:bg-gray-200 rounded-lg text-sm font-semibold text-gray-700 transition-colors"
+            >
+              Fechar
+            </button>
+          </div>
+        </>
+      )}
     </>
   );
 }
